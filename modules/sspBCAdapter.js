@@ -6,7 +6,7 @@ const BIDDER_CODE = 'sspBC';
 const BIDDER_URL = 'https://ssp.wp.pl/bidder/';
 const SYNC_URL = 'https://ssp.wp.pl/bidder/usersync';
 const TMAX = 450;
-const BIDDER_VERSION = '4.4';
+const BIDDER_VERSION = '4.5';
 const W = window;
 const { navigator } = W;
 
@@ -201,6 +201,7 @@ const spec = {
     const domain = setOnAny(validBidRequests, 'params.domain') || utils.parseUrl(page).hostname;
     const tmax = setOnAny(validBidRequests, 'params.tmax') ? parseInt(setOnAny(validBidRequests, 'params.tmax'), 10) : TMAX;
     const pbver = '$prebid.version$';
+    const testMode = setOnAny(validBidRequests, 'params.test') ? 1 : undefined;
 
     let ref;
 
@@ -216,6 +217,7 @@ const spec = {
       tmax,
       user: {},
       regs: {},
+      test: testMode,
     };
 
     applyGdpr(bidderRequest, payload);
@@ -265,7 +267,7 @@ const spec = {
 
             const bid = {
               requestId: bidRequest.bidId,
-              creativeId: serverBid.crid || 'bc' + Math.floor(1E10 * Math.random()),
+              creativeId: serverBid.crid || 'mcad_' + request.bidderRequest.auctionId + '_' + request.bidderRequest.params.id,
               cpm: bidCpm || serverBid.price,
               currency: response.cur,
               ttl: serverBid.exp || 300,
