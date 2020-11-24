@@ -148,7 +148,7 @@ function mapImpression(slot) {
     tagid: slot.adUnitCode,
   };
 
-  const bidfloor = slot.params ? parseFloat(slot.params.bidfloor) : undefined;
+  const bidfloor = (slot.params && slot.params.bidFloor) ? parseFloat(slot.params.bidFloor) : undefined;
 
   if (bidfloor) {
     imp.bidfloor = bidfloor;
@@ -299,8 +299,8 @@ const spec = {
             update site data in this case
           */
           site.id = serverBid.siteid || site.id;
-          if (bidRequest && site.id) {
-            const bidFloor = bidRequest.params.bidFloor || 0;
+          if (bidRequest && site.id && !site.id.includes('bidid')) {
+            const bidFloor = (bidRequest.params && bidRequest.params.bidFloor) ? bidRequest.params.bidFloor : 0;
 
             const bid = {
               requestId: bidRequest.bidId,
