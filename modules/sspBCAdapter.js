@@ -23,7 +23,7 @@ const getNotificationPayload = bidData => {
     if (bids.length > 0) {
       let result = {
         requestId: undefined,
-        siteId: undefined,
+        siteId: [],
         adUnit: [],
         id: [],
       }
@@ -31,6 +31,9 @@ const getNotificationPayload = bidData => {
         let params = utils.isArray(bid.params) ? bid.params[0] : bid.params;
         params = params || {};
 
+        if (params.siteId) {
+          result.siteId.push(params.siteId);
+        }
         if (params.id) {
           result.id.push(params.siteId);
         }
@@ -43,7 +46,6 @@ const getNotificationPayload = bidData => {
         }
         result.adUnit.push(bid.adUnitCode)
         result.requestId = bid.auctionId || result.requestId;
-        result.siteId = params.siteId || result.siteId;
         result.timeout = bid.timeout || result.timeout;
       })
       return result;
