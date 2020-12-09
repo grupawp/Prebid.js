@@ -64,7 +64,7 @@ describe('SSPBC adapter', function () {
       transactionId,
     }
     ];
-    const bid_oneTag = {
+    const bid_OneCode = {
       adUnitCode: 'test_wideboard',
       bidder: BIDDER_CODE,
       mediaTypes: {
@@ -164,11 +164,11 @@ describe('SSPBC adapter', function () {
         stack: ['https://test.site.pl/'],
       }
     };
-    const bidRequestOneTag = {
+    const bidRequestOneCode = {
       auctionId,
       bidderCode: BIDDER_CODE,
       bidderRequestId,
-      bids: [bid_oneTag],
+      bids: [bid_OneCode],
       gdprConsent,
       refererInfo: {
         reachedTop: true,
@@ -264,15 +264,13 @@ describe('SSPBC adapter', function () {
         'cur': 'PLN'
       }
     };
-    const serverResponseOneTag = {
+    const serverResponseOneCode = {
       'body': {
         'id': auctionId,
         'seatbid': [{
           'bid': [{
             'id': '3347324c-6889-46d2-a800-ae78a5214c06',
             'impid': 'bidid-' + auctionId + '1',
-            'siteid': '8816',
-            'slotid': '003',
             'price': 1,
             'adid': 'lxHWkB7OnZeso3QiN1N4',
             'nurl': '',
@@ -281,7 +279,11 @@ describe('SSPBC adapter', function () {
             'cid': 'BZ4gAg21T5nNtxlUCDSW',
             'crid': 'lxHWkB7OnZeso3QiN1N4',
             'w': 728,
-            'h': 90
+            'h': 90,
+            'ext': {
+              'siteid': '8816',
+              'slotid': '003',
+            },
           }],
           'seat': 'dsp1',
           'group': 0
@@ -295,17 +297,17 @@ describe('SSPBC adapter', function () {
       }
     }
     return {
-      bid_oneTag,
+      bid_OneCode,
       bids,
       bids_test,
       bids_timeouted,
       bidRequest,
-      bidRequestOneTag,
+      bidRequestOneCode,
       bidRequestSingle,
       bidRequestTest,
       bidRequestTestNoGDPR,
       serverResponse,
-      serverResponseOneTag,
+      serverResponseOneCode,
       serverResponseSingle,
       emptyResponse
     };
@@ -323,7 +325,7 @@ describe('SSPBC adapter', function () {
     const { bids } = prepareTestData();
     let bid = bids[0];
 
-    it('should always return true whether bid has params (standard) or not (onetag)', function () {
+    it('should always return true whether bid has params (standard) or not (OneCode)', function () {
       assert(spec.isBidRequestValid(bid));
       bid.params.id = undefined;
       assert(spec.isBidRequestValid(bid));
@@ -371,10 +373,10 @@ describe('SSPBC adapter', function () {
   });
 
   describe('interpretResponse', function () {
-    const { bid_oneTag, bids, emptyResponse, serverResponse, serverResponseOneTag, serverResponseSingle, bidRequest, bidRequestOneTag, bidRequestSingle } = prepareTestData();
+    const { bid_OneCode, bids, emptyResponse, serverResponse, serverResponseOneCode, serverResponseSingle, bidRequest, bidRequestOneCode, bidRequestSingle } = prepareTestData();
     const request = spec.buildRequests(bids, bidRequest);
     const requestSingle = spec.buildRequests([bids[0]], bidRequestSingle);
-    const requestOneTag = spec.buildRequests([bid_oneTag], bidRequestOneTag);
+    const requestOneCode = spec.buildRequests([bid_OneCode], bidRequestOneCode);
 
     it('should handle nobid responses', function () {
       let result = spec.interpretResponse(emptyResponse, request);
@@ -390,11 +392,11 @@ describe('SSPBC adapter', function () {
       expect(resultSingle[0]).to.have.keys('ad', 'cpm', 'width', 'height', 'bidderCode', 'mediaType', 'meta', 'requestId', 'creativeId', 'currency', 'netRevenue', 'ttl');
     });
 
-    it('should create bid from oneTag (parameter-less) request, if response contains siteId', function () {
-      let resultOneTag = spec.interpretResponse(serverResponseOneTag, requestOneTag);
+    it('should create bid from OneCode (parameter-less) request, if response contains siteId', function () {
+      let resultOneCode = spec.interpretResponse(serverResponseOneCode, requestOneCode);
 
-      expect(resultOneTag.length).to.equal(1);
-      expect(resultOneTag[0]).to.have.keys('ad', 'cpm', 'width', 'height', 'bidderCode', 'mediaType', 'meta', 'requestId', 'creativeId', 'currency', 'netRevenue', 'ttl');
+      expect(resultOneCode.length).to.equal(1);
+      expect(resultOneCode[0]).to.have.keys('ad', 'cpm', 'width', 'height', 'bidderCode', 'mediaType', 'meta', 'requestId', 'creativeId', 'currency', 'netRevenue', 'ttl');
     });
 
     it('should handle a partial response', function () {

@@ -210,6 +210,7 @@ function renderCreative(site, auctionId, bid, seat, request) {
 </style>
   <script>
   window.rekid = ${site.id};
+  window.slot = ${site.slot};
   window.wp_sn = "${site.sn}";
   window.mcad = JSON.parse(decodeURI(atob("${mcbase}")));
   window.gdpr = ${JSON.stringify(request.gdprConsent)};
@@ -237,7 +238,7 @@ const spec = {
   aliases: [],
   supportedMediaTypes: [BANNER],
   isBidRequestValid(bid) {
-    // as per onetag integration, bids without params are valid
+    // as per OneCode integration, bids without params are valid
     return true;
   },
   buildRequests(validBidRequests, bidderRequest) {
@@ -295,12 +296,17 @@ const spec = {
             const bidId = b.params ? b.params.id : 'bidid-' + b.bidId;
             return bidId === serverBid.impid;
           })[0];
+          site.slot = bidRequest && bidRequest.params ? bidRequest.params.slotid : undefined;
 
-          /*
-            bid response might include siteId, as detected by oneTag
-            update site data in this case
-          */
-          site.id = serverBid.siteid || site.id;
+          if (serverBid.ext) {
+            /*
+              bid response might include ext object containing siteId / slotId, as detected by OneCode
+              update site / slot data in this case
+            */
+            site.id = serverBid.ext.siteid || site.id;
+            site.slot = serverBid.ext.slotid || site.slot;
+          }
+
           if (bidRequest && site.id && !site.id.includes('bidid')) {
             const bidFloor = (bidRequest.params && bidRequest.params.bidFloor) ? bidRequest.params.bidFloor : 0;
 
