@@ -11,6 +11,7 @@ const TMAX = 450;
 const BIDDER_VERSION = '4.7';
 const W = window;
 const { navigator } = W;
+const oneCodeDetection = {};
 var consentApiVersion;
 
 /**
@@ -31,11 +32,17 @@ const getNotificationPayload = bidData => {
         let params = utils.isArray(bid.params) ? bid.params[0] : bid.params;
         params = params || {};
 
+        // check for stored detection
+        if (oneCodeDetection[bid.requestId]) {
+          params.siteId = oneCodeDetection[bid.requestId].id;
+          params.id = oneCodeDetection[bid.requestId].slot;
+        }
+
         if (params.siteId) {
           result.siteId.push(params.siteId);
         }
         if (params.id) {
-          result.id.push(params.siteId);
+          result.id.push(params.id);
         }
         if (bid.cpm) {
           const meta = bid.meta || {};
@@ -308,6 +315,9 @@ const spec = {
           }
 
           if (bidRequest && site.id && !site.id.includes('bidid')) {
+            // store site data for future notification
+            oneCodeDetection[bidRequest.bidId] = site;
+
             const bidFloor = (bidRequest.params && bidRequest.params.bidFloor) ? bidRequest.params.bidFloor : 0;
 
             const bid = {
