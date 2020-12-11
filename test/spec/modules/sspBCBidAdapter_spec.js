@@ -1,5 +1,5 @@
 import { assert, expect } from 'chai';
-import { spec } from 'modules/sspBCAdapter.js';
+import { spec } from 'modules/sspBCBidAdapter.js';
 import * as utils from 'src/utils.js';
 
 const BIDDER_CODE = 'sspBC';
@@ -399,6 +399,12 @@ describe('SSPBC adapter', function () {
       expect(resultOneCode[0]).to.have.keys('ad', 'cpm', 'width', 'height', 'bidderCode', 'mediaType', 'meta', 'requestId', 'creativeId', 'currency', 'netRevenue', 'ttl');
     });
 
+    it('should not create bid from OneCode (parameter-less) request, if response does not contain siteId', function () {
+      let resultOneCodeNoMatch = spec.interpretResponse(serverResponse, requestOneCode);
+
+      expect(resultOneCodeNoMatch.length).to.equal(0);
+    });
+
     it('should handle a partial response', function () {
       let resultPartial = spec.interpretResponse(serverResponseSingle, request);
       expect(resultPartial.length).to.equal(1);
@@ -437,7 +443,7 @@ describe('SSPBC adapter', function () {
       expect(notificationPayload).to.be.undefined;
     });
 
-    it('should generate notification with event name and request/adUnit data, if correct bid is provided', function () {
+    it('should generate notification with event name and request/adUnit data, if correct bid is provided. Should also contain site/slot data as arrays.', function () {
       const { bids } = prepareTestData();
       let bid = bids[0];
 
@@ -445,6 +451,8 @@ describe('SSPBC adapter', function () {
       expect(notificationPayload).to.have.property('event').that.equals('bidWon');
       expect(notificationPayload).to.have.property('requestId').that.equals(bid.auctionId);
       expect(notificationPayload).to.have.property('adUnit').that.deep.equals([bid.adUnitCode]);
+      expect(notificationPayload).to.have.property('siteId').that.is.an('array');
+      expect(notificationPayload).to.have.property('id').that.is.an('array');
     });
   });
 
