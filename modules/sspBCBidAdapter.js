@@ -227,47 +227,58 @@ const mapBanner = slot => {
  * @returns {object} native asset object that conforms to ortb native ads spec
  */
 const mapAsset = (paramName, paramValue) => {
+  const { required, sizes, wmin, hmin, len } = paramValue;
   let asset;
   switch (paramName) {
     case 'title':
       asset = {
         id: 0,
-        required: paramValue.required,
-        title: { len: paramValue.len }
+        required: required,
+        title: { len }
       }
       break;
     case 'cta':
       asset = {
         id: 1,
-        required: paramValue.required,
+        required: required,
         data: { type: 12 }
       }
       break;
     case 'icon':
       asset = {
         id: 2,
-        required: paramValue.required,
-        img: { type: 1, w: paramValue.sizes[0], h: paramValue.sizes[1] }
+        required: required,
+        img: {
+          type: 1,
+          w: sizes && sizes[0],
+          h: sizes && sizes[1]
+        }
       }
       break;
     case 'image':
       asset = {
         id: 3,
-        required: paramValue.required,
-        img: { type: 3, w: paramValue.sizes[0], h: paramValue.sizes[1] }
+        required: required,
+        img: {
+          type: 3,
+          w: sizes && sizes[0],
+          h: sizes && sizes[1],
+          wmin,
+          hmin
+        }
       }
       break;
     case 'body':
       asset = {
         id: 4,
-        required: paramValue.required,
+        required: required,
         data: { type: 2 }
       }
       break;
     case 'sponsoredBy':
       asset = {
         id: 5,
-        required: paramValue.required,
+        required: required,
         data: { type: 1 }
       }
       break;
