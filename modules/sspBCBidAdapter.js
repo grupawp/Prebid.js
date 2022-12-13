@@ -13,7 +13,7 @@ const NOTIFY_URL = 'https://ssp.wp.pl/bidder/notify';
 const TRACKER_URL = 'https://bdr.wpcdn.pl/tag/jstracker.js';
 const GVLID = 676;
 const TMAX = 450;
-const BIDDER_VERSION = '5.7';
+const BIDDER_VERSION = '5.8';
 const DEFAULT_CURRENCY = 'PLN';
 const W = window;
 const { navigator } = W;
@@ -228,62 +228,61 @@ const mapBanner = slot => {
  */
 const mapAsset = (paramName, paramValue) => {
   const { required, sizes, wmin, hmin, len } = paramValue;
-  let asset;
+  let assets = [];
   switch (paramName) {
     case 'title':
-      asset = {
-        id: 0,
+      assets.push({
         required: required,
         title: { len }
-      }
+      });
       break;
     case 'cta':
-      asset = {
-        id: 1,
+      assets.push({
         required: required,
         data: { type: 12 }
-      }
+      });
       break;
     case 'icon':
-      asset = {
-        id: 2,
+      assets.push({
         required: required,
         img: {
           type: 1,
           w: sizes && sizes[0],
           h: sizes && sizes[1]
         }
-      }
+      });
       break;
     case 'image':
-      asset = {
-        id: 3,
+      const hasMultipleImages = sizes && Array.isArray(sizes[0]);
+      const imageSizes = hasMultipleImages ? sizes : [sizes];
+      const mapSingleImage = (imageNumber, imageSize) => assets.push({
         required: required,
         img: {
           type: 3,
-          w: sizes && sizes[0],
-          h: sizes && sizes[1],
+          w: imageSize[0],
+          h: imageSize[1],
           wmin,
           hmin
         }
+      });
+      for (let i = 0; i < imageSizes.length; i++) {
+        mapSingleImage(i, imageSizes[i]);
       }
       break;
     case 'body':
-      asset = {
-        id: 4,
+      assets.push({
         required: required,
         data: { type: 2 }
-      }
+      });
       break;
     case 'sponsoredBy':
-      asset = {
-        id: 5,
+      assets.push({
         required: required,
         data: { type: 1 }
-      }
+      });
       break;
   }
-  return asset;
+  return assets;
 }
 
 /**
@@ -297,8 +296,12 @@ const mapNative = slot => {
     const nativeParams = Object.keys(native);
     assets = [];
     nativeParams.forEach(par => {
-      const newAsset = mapAsset(par, native[par]);
-      if (newAsset) { assets.push(newAsset) };
+      const newAssets = mapAsset(par, native[par]);
+      newAssets.forEach(asset => {
+        asset.id = assets.length;
+        assets.push(asset);
+      });
+      // console.log(newAssets, assets);
     });
   }
   return assets ? { request: JSON.stringify({ native: { assets } }) } : undefined;
@@ -409,37 +412,41 @@ const isNativeAd = bid => {
 const parseNative = nativeData => {
   const result = {};
   nativeData.assets.forEach(asset => {
-    const id = parseInt(asset.id);
-    switch (id) {
-      case 0:
-        result.title = asset.title.text;
-        break;
-      case 1:
-        result.cta = asset.data.value;
-        break;
-      case 2:
-        result.icon = {
-          url: asset.img.url,
-          width: asset.img.w,
-          height: asset.img.h,
-        };
-        break;
-      case 3:
-        result.image = {
-          url: asset.img.url,
-          width: asset.img.w,
-          height: asset.img.h,
-        };
-        break;
-      case 4:
-        result.body = asset.data.value;
-        break;
-      case 5:
-        result.sponsoredBy = asset.data.value;
-        break;
+    const { img = {}, title = {}, data = {} } = asset;
+    const { type: imgType } = img;
+    const { type: dataType, value: dataValue } = data;
+    const { text: titleText } = title;
 
-      default:
-        logWarn('Unrecognized native asset', asset);
+    if (titleText) {
+      result.title = titleText;
+    }
+
+    if (imgType === 3) {
+      result.image = {
+        url: img.url,
+        width: img.w,
+        height: img.h,
+      };
+    }
+
+    if (imgType === 1) {
+      result.icon = {
+        url: img.url,
+        width: img.w,
+        height: img.h,
+      };
+    }
+
+    if (dataType === 1) {
+      result.cta = dataValue;
+    }
+
+    if (dataType === 3) {
+      result.sponsoredBy = dataValue;
+    }
+
+    if (dataType === 4) {
+      result.body = dataValue;
     }
   });
   result.clickUrl = nativeData.link.url;
