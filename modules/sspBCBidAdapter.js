@@ -12,7 +12,7 @@ const SYNC_URL = 'https://ssp.wp.pl/bidder/usersync';
 const NOTIFY_URL = 'https://ssp.wp.pl/bidder/notify';
 const GVLID = 676;
 const TMAX = 450;
-const BIDDER_VERSION = '5.8';
+const BIDDER_VERSION = '6.0';
 const DEFAULT_CURRENCY = 'PLN';
 const W = window;
 const { navigator } = W;
@@ -493,15 +493,20 @@ const isNativeAd = bid => {
   return bid.admNative || (bid.adm && bid.adm.match(xmlTester));
 }
 
-const parseNative = (nativeData) => {
+const parseNative = (nativeData, adUnitCode) => {
   const { link = {}, imptrackers: impressionTrackers, jstracker } = nativeData;
   const { url: clickUrl, clicktrackers: clickTrackers = [] } = link;
+  const macroReplacer = tracker => tracker.replace(new RegExp('%native_dom_id%', 'g'), adUnitCode);
+  let javascriptTrackers = isArray(jstracker) ? jstracker : jstracker && [jstracker];
+
+  // replace known macros in js trackers
+  javascriptTrackers = javascriptTrackers && javascriptTrackers.map(macroReplacer);
 
   const result = {
     clickUrl,
     clickTrackers,
     impressionTrackers,
-    javascriptTrackers: isArray(jstracker) ? jstracker : jstracker && [jstracker],
+    javascriptTrackers,
   };
 
   nativeData.assets.forEach(asset => {
@@ -539,81 +544,6 @@ const parseNative = (nativeData) => {
   });
 
   return result;
-}
-
-const renderCreative = (site, auctionId, bid, seat, request) => {
-  let gam;
-
-  const mcad = {
-    id: auctionId,
-    seat,
-    seatbid: [{
-      bid: [bid],
-    }],
-  };
-
-  const mcbase = btoa(encodeURI(JSON.stringify(mcad)));
-
-  if (bid.adm) {
-    // parse adm for gam config
-    try {
-      gam = JSON.parse(bid.adm).gam;
-
-      if (!gam || !Object.keys(gam).length) {
-        gam = undefined;
-      } else {
-        gam.namedSizes = ['fluid'];
-        gam.div = 'div-gpt-ad-x01';
-        gam.targeting = Object.assign(gam.targeting || {}, {
-          OAS_retarg: '0',
-          PREBID_ON: '1',
-          emptygaf: '0',
-        });
-      }
-
-      if (gam && !gam.targeting) {
-        gam.targeting = {};
-      }
-    } catch (err) {
-      logWarn('Could not parse adm data', bid.adm);
-    }
-  }
-
-  let adcode = `<head>
-  <title></title>
-  <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-    body {
-    background-color: transparent;
-    margin: 0;
-    padding: 0;
-  }
-</style>
-  <script>
-  window.rekid = ${site.id};
-  window.slot = ${parseInt(site.slot, 10)};
-  window.responseTimestamp = ${Date.now()};
-  window.wp_sn = "${site.sn}";
-  window.mcad = JSON.parse(decodeURI(atob("${mcbase}")));
-  window.gdpr = ${JSON.stringify(request.gdprConsent)};
-  window.page = "${site.page}";
-  window.ref = "${site.ref}";
-  window.adlabel = "${site.adLabel ? site.adLabel : ''}";
-  window.pubid = "${site.publisherId ? site.publisherId : ''}";
-  window.requestPVID = "${pageView.id}";
-  `;
-
-  adcode += `</script>
-    </head>
-    <body>
-    <div id="c"></div>
-    <script async crossorigin nomodule src="https://std.wpcdn.pl/wpjslib/wpjslib-inline.js" id="wpjslib"></script>
-    <script async crossorigin type="module" src="https://std.wpcdn.pl/wpjslib6/wpjslib-inline.js" id="wpjslib6"></script>
-  </body>
-  </html>`;
-
-  return adcode;
 }
 
 const spec = {
@@ -724,6 +654,7 @@ const spec = {
 
           if (bidRequest && site.id && !strIncludes(site.id, 'bidid')) {
             // found a matching request; add this bid
+            const { adUnitCode } = bidRequest;
 
             // store site data for future notification
             oneCodeDetection[bidId] = [site.id, site.slot];
@@ -760,7 +691,7 @@ const spec = {
               // check native object
               try {
                 const nativeData = serverBid.admNative || JSON.parse(serverBid.adm).native;
-                bid.native = parseNative(nativeData);
+                bid.native = parseNative(nativeData, adUnitCode);
                 bid.width = 1;
                 bid.height = 1;
               } catch (err) {
@@ -770,7 +701,7 @@ const spec = {
             } else {
               // banner ad (default)
               bid.mediaType = 'banner';
-              bid.ad = renderCreative(site, response.id, serverBid, seat, bidderRequest);
+              bid.ad = serverBid.adm;
             }
 
             if (bid.cpm > 0) {
