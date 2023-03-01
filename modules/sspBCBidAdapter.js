@@ -568,6 +568,7 @@ const spec = {
     const page = setOnAny(validBidRequests, 'params.page') || bidderRequest.refererInfo.page;
     const domain = setOnAny(validBidRequests, 'params.domain') || bidderRequest.refererInfo.domain;
     const tmax = setOnAny(validBidRequests, 'params.tmax') ? parseInt(setOnAny(validBidRequests, 'params.tmax'), 10) : TMAX;
+    const requestUrl = setOnAny(validBidRequests, 'params.url');
     const pbver = '$prebid.version$';
     const testMode = setOnAny(validBidRequests, 'params.test') ? 1 : undefined;
     const ref = bidderRequest.refererInfo.ref;
@@ -599,6 +600,14 @@ const spec = {
     applyClientHints(payload);
     applyUserIds(validBidRequests[0], payload);
 
+    if (requestUrl) {
+      return {
+        method: 'GET',
+        url: requestUrl,
+        bidderRequest,
+      };
+    }
+
     return {
       method: 'POST',
       url: `${BIDDER_URL}?bdver=${BIDDER_VERSION}&pbver=${pbver}&inver=0`,
@@ -611,7 +620,7 @@ const spec = {
     const { bidderRequest } = request;
     const response = serverResponse.body;
     const bids = [];
-    let site = JSON.parse(request.data).site; // get page and referer data from request
+    let site = request.data ? JSON.parse(request.data).site : {}; // get page and referer data from request
     site.sn = response.sn || 'mc_adapter'; // WPM site name (wp_sn)
     pageView.sn = site.sn; // store site_name (for syncing and notifications)
     let seat;
@@ -627,13 +636,19 @@ const spec = {
           // get data from bid response
           const { adomain, crid = `mcad_${bidderRequest.auctionId}_${site.slot}`, impid, exp = 300, ext = {}, price, w, h } = serverBid;
 
-          const bidRequest = bidderRequest.bids.filter(b => {
+          let bidRequest = bidderRequest.bids.filter(b => {
             const { bidId, params: requestParams = {} } = b;
             const params = unpackParams(requestParams);
             const { id, siteId } = params;
             const currentBidId = id && siteId ? id : 'bidid-' + bidId;
             return currentBidId === impid;
           })[0];
+
+          if (!bidRequest) {
+            // test url might not match to request - force match it to 1st request
+            bidRequest = bidderRequest.bids[0];
+            logWarn('Could not find matching requerst - force match it to first one');
+          }
 
           // get bidid from linked bidRequest
           const { bidId } = bidRequest || {};
