@@ -421,7 +421,7 @@ describe('SSPBC adapter', function () {
             'price': 1,
             'adid': 'lxHWkB7OnZeso3QiN1N4',
             'nurl': '',
-            'adm': '{\"native\":{\"assets\":[{\"id\":3,\"img\":{\"url\":\"native_image\",\"w\":300,\"h\":150}},{\"id\":2,\"img\":{\"url\":\"native_icon\",\"w\":50,\"h\":50}},{\"id\":0,\"title\":{\"text\":\"native_title\"}},{\"id\":5,\"data\":{\"value\":\"native adomain\"}},{\"id\":4,\"data\":{\"value\":\"native_text\"}}],\"link\":{\"url\":\"native_url\"},\"imptrackers\":[\"native_tracker\"]}}',
+            'adm': '{\"native\":{\"assets\":[{\"id\":3,\"img\":{\"url\":\"native_image\",\"w\":300,\"h\":150}},{\"id\":2,\"img\":{\"url\":\"native_icon\",\"w\":50,\"h\":50}},{\"id\":0,\"title\":{\"text\":\"native_title\"}},{\"id\":5,\"data\":{\"value\":\"native adomain\"}},{\"id\":4,\"data\":{\"value\":\"native_text\"}}],\"link\":{\"url\":\"native_url\"},\"imptrackers\":[\"native_tracker\"], \"jstracker\":[\"native_tracker?MACRO1=%native_dom_id%\"]}}',
             'adomain': ['adomain.pl'],
             'cid': 'BZ4gAg21T5nNtxlUCDSW',
             'crid': 'lxHWkB7OnZeso3QiN1N4',
@@ -632,15 +632,10 @@ describe('SSPBC adapter', function () {
       expect(resultPartial.length).to.equal(1);
     });
 
-    it('banner ad code should contain required variables', function () {
+    it('banner ad code should be copied from bid.adm', function () {
       let resultSingle = spec.interpretResponse(serverResponseSingle, requestSingle);
       let adcode = resultSingle[0].ad;
-      expect(adcode).to.be.a('string');
-      expect(adcode).to.contain('window.rekid');
-      expect(adcode).to.contain('window.mcad');
-      expect(adcode).to.contain('window.gdpr');
-      expect(adcode).to.contain('window.page');
-      expect(adcode).to.contain('window.requestPVID');
+      expect(adcode).to.equal('AD CODE 1');
     });
 
     it('should create a correct video bid', function () {
@@ -665,6 +660,23 @@ describe('SSPBC adapter', function () {
       let nativeBid = resultNative[0];
       expect(nativeBid).to.have.keys('bidderCode', 'cpm', 'creativeId', 'currency', 'width', 'height', 'meta', 'mediaType', 'netRevenue', 'requestId', 'ttl', 'native', 'vurls');
       expect(nativeBid.native).to.have.keys('image', 'icon', 'title', 'sponsoredBy', 'body', 'clickUrl', 'impressionTrackers', 'javascriptTrackers', 'clickTrackers');
+    });
+
+    it('should replace known macros in javascript trackers', function () {
+      const knownTrackerMacros = ['%native_dom_id%'];
+      const resultNative = spec.interpretResponse(serverResponseNative, requestNative);
+
+      expect(resultNative.length).to.equal(1);
+
+      const nativeBid = resultNative[0];
+      const { native } = nativeBid;
+      const { javascriptTrackers } = native;
+
+      expect(javascriptTrackers.length).to.equal(1);
+
+      knownTrackerMacros.forEach(tracker => {
+        expect(javascriptTrackers[0]).to.not.include(tracker);
+      });
     });
   });
 

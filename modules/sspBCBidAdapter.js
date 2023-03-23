@@ -1,10 +1,10 @@
-import { deepAccess, getWindowTop, isArray, logWarn } from '../src/utils.js';
+import { deepAccess, deepSetValue, getWindowTop, isArray, logWarn } from '../src/utils.js';
 import { ajax } from '../src/ajax.js';
 import { config } from '../src/config.js';
+import { ortbConverter } from '../libraries/ortbConverter/converter.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { BANNER, NATIVE, VIDEO } from '../src/mediaTypes.js';
 import { includes as strIncludes } from '../src/polyfill.js';
-import { convertOrtbRequestToProprietaryNative } from '../src/native.js';
 
 const BIDDER_CODE = 'sspBC';
 const BIDDER_URL = 'https://ssp.wp.pl/bidder/';
@@ -12,7 +12,7 @@ const SYNC_URL = 'https://ssp.wp.pl/bidder/usersync';
 const NOTIFY_URL = 'https://ssp.wp.pl/bidder/notify';
 const GVLID = 676;
 const TMAX = 450;
-const BIDDER_VERSION = '5.8';
+const BIDDER_VERSION = '6.0';
 const DEFAULT_CURRENCY = 'PLN';
 const W = window;
 const { navigator } = W;
@@ -36,6 +36,161 @@ var nativeAssetMap = {
 };
 
 /**
+ * Get language of top level html object
+ * @returns {string} languageCode - ISO language code
+ */
+const getContentLanguage = () => {
+  try {
+    const topWindow = getWindowTop();
+    return topWindow.document.body.parentNode.lang;
+  } catch (err) {
+    logWarn('Could not read language form top-level html', err);
+  }
+};
+
+/**
+ * Re-format ortb 2.5 native object
+ * @param {object} native payload
+ * @returns {object} updated payload
+ */
+const formatNativePayload = payload => {
+  const { request } = payload;
+  try {
+    const requestObject = JSON.parse(request);
+    const { native, assets } = requestObject;
+    if (assets && !native) {
+      payload.request = JSON.stringify({
+        native: { assets }
+      });
+    }
+  } catch (err) {
+    logWarn('Error reading native payload', err);
+  }
+
+  return payload;
+};
+
+/**
+ * Re-format ortb 2.5 consent data
+ * @param {object} request payload
+ * @returns {object} updated payload
+ */
+const formatGDPR = payload => {
+  const { regs = {}, user = {} } = payload;
+  const { ext: regsExt = {} } = regs;
+  const { ext: userExt = {} } = user;
+
+  if (regsExt.gdpr != undefined) {
+    payload.regs.gdpr = regsExt.gdpr;
+    payload.regs.ext.gdpr = undefined;
+  }
+
+  if (userExt.consent != undefined) {
+    payload.user.consent = userExt.consent;
+    payload.user.ext.consent = undefined;
+    payload.user.ext.ConsentedProvidersSettings = undefined;
+  }
+};
+
+/**
+ * opern rtb converter
+ */
+const converter = ortbConverter({
+  context: {
+    netRevenue: true,
+    ttl: 300
+  },
+
+  /*
+  overrides: {
+    // overrides are executed before processor
+    // all processors are called for all impressions (banner, video, native for all imps)
+    imp: {
+      banner(orig, imp, bidRequest, context) {
+        logWarn('Override for banner', imp, bidRequest);
+        orig(imp, bidRequest, context);
+      },
+      video(orig, imp, bidRequest, context) {
+        logWarn('Override for video', imp, bidRequest);
+        orig(imp, bidRequest, context);
+      },
+      native(orig, imp, bidRequest, context) {
+        logWarn('Override for native', imp, bidRequest);
+        orig(imp, bidRequest, context);
+      },
+    }
+  },
+    */
+
+  imp(buildImp, bidRequest, context) {
+    const { bidId, adUnitCode, sizes, params = {} } = bidRequest;
+    const { id, siteId } = params;
+    const imp = buildImp(bidRequest, context);
+
+    // Set id (pseudorandom, or equal to params.id) and tagid (equal to adunitcode)
+    imp.id = id && siteId ? id.padStart(3, '0') : 'bidid-' + bidId;
+    imp.tagid = adUnitCode;
+
+    // Check floorprices
+    const { floor, currency } = getHighestFloor(bidRequest);
+    imp.bidfloor = floor;
+    imp.bidfloorcur = currency;
+
+    // Pass largest size x times used as ext.pbsize
+    const impSize = sizes.length ? sizes.reduce((prev, next) => prev[0] * prev[1] <= next[0] * next[1] ? next : prev).join('x') : '1x1';
+
+    if (!adUnitsCalled[adUnitCode]) {
+      // this is a new adunit - assign & save pbsize
+      adSizesCalled[impSize] = adSizesCalled[impSize] ? adSizesCalled[impSize] += 1 : 1;
+      adUnitsCalled[adUnitCode] = `${impSize}_${adSizesCalled[impSize]}`;
+    }
+
+    deepSetValue(imp, 'ext.data.pbsize', adUnitsCalled[adUnitCode]);
+
+    // Native payload has to bo formatted to be 2.6 compliant
+    const { native } = imp;
+    imp.native = native && formatNativePayload(native);
+
+    // Video payload needs context property
+    const { video = {} } = imp;
+    const { placement } = video;
+    if (placement === 1) {
+      imp.video.context = 'instream';
+    } else if (placement === 2) {
+      imp.video.context = 'outstream';
+    }
+
+    logWarn('converter -> build imp', bidRequest, imp, context);
+
+    return imp;
+  },
+
+  request(buildRequest, imps, bidderRequest, context) {
+    const { bidRequests = [] } = context;
+    const { bids = [] } = bidderRequest;
+    const request = buildRequest(imps, bidderRequest, context);
+
+    // get site id and test mode
+    const siteId = setOnAny(bidRequests, 'params.siteId') || request.site.id;
+    const isTest = setOnAny(bidRequests, 'params.test') || undefined;
+
+    request.site.id = siteId;
+    request.site.content = { language: getContentLanguage() };
+    request.test = isTest;
+    request.tmax = TMAX;
+
+    // add client hints and user IDs
+    applyClientHints(request);
+    applyUserIds(bids[0], request);
+
+    // reformat consent data to be 2.6 compliant
+    formatGDPR(request);
+
+    return request;
+  },
+});
+
+/**
  * return native asset type, based on asset id
  * @param {int} id - native asset id
  * @returns {string} asset type
@@ -54,25 +209,6 @@ const getNativeAssetType = id => {
     }
   }
 }
-
-/**
- * Get preferred language of browser (i.e. user)
- * @returns {string} languageCode - ISO language code
- */
-const getBrowserLanguage = () => navigator.language || (navigator.languages && navigator.languages[0]);
-
-/**
- * Get language of top level html object
- * @returns {string} languageCode - ISO language code
- */
-const getContentLanguage = () => {
-  try {
-    const topWindow = getWindowTop();
-    return topWindow.document.body.parentNode.lang;
-  } catch (err) {
-    logWarn('Could not read language form top-level html', err);
-  }
-};
 
 /**
  * Get Bid parameters - returns bid params from Object, or 1el array
@@ -160,7 +296,7 @@ const applyClientHints = ortbRequest => {
 
   /**
     Check / generate page view id
-    Should be generated dureing first call to applyClientHints(),
+    Should be generated during first call to applyClientHints(),
     and re-generated if pathname has changed
   */
   if (!pageView.id || location.pathname !== pageView.path) {
@@ -204,20 +340,6 @@ const applyUserIds = (validBidRequest, ortbRequest) => {
     ortbRequest.user = { ...ortbRequest.user, ...ids };
   }
 };
-
-/**
- * Add GDPR data to oRTB request
- * Store conset API version (will be required by user sync)
- */
-const applyGdpr = (bidderRequest, ortbRequest) => {
-  const { gdprConsent } = bidderRequest;
-  if (gdprConsent) {
-    const { apiVersion, gdprApplies, consentString } = gdprConsent;
-    consentApiVersion = apiVersion;
-    ortbRequest.regs = Object.assign(ortbRequest.regs, { 'gdpr': gdprApplies ? 1 : 0 });
-    ortbRequest.user = Object.assign(ortbRequest.user, { 'consent': consentString });
-  }
-}
 
 /**
  * Get highest floorprice for a given adslot
@@ -282,206 +404,6 @@ const sendNotification = payload => {
   });
 }
 
-/**
- * @param {object} slot Ad Unit Params by Prebid
- * @returns {object} Banner by OpenRTB 2.5 §3.2.6
- */
-const mapBanner = slot => {
-  if (slot.mediaType === 'banner' ||
-    deepAccess(slot, 'mediaTypes.banner') ||
-    (!slot.mediaType && !slot.mediaTypes)) {
-    const format = slot.sizes.map(size => ({
-      w: size[0],
-      h: size[1],
-    }));
-
-    return {
-      format,
-      id: slot.bidId,
-    };
-  }
-}
-
-/**
- * @param {string} paramName Native parameter name
- * @param {object} paramValue Native parameter value
- * @returns {object} native asset object that conforms to ortb native ads spec
- */
-var mapAsset = function mapAsset(paramName, paramValue) {
-  const { required, sizes, wmin, hmin, len } = paramValue;
-  var id = nativeAssetMap[paramName];
-  var assets = [];
-
-  if (id !== undefined) {
-    switch (paramName) {
-      case 'title':
-        assets.push({
-          id: id,
-          required: required,
-          title: {
-            len: len
-          }
-        });
-        break;
-
-      case 'cta':
-        assets.push({
-          id: id,
-          required: required,
-          data: {
-            type: 12
-          }
-        });
-        break;
-
-      case 'icon':
-        assets.push({
-          id: id,
-          required: required,
-          img: {
-            type: 1,
-            w: sizes && sizes[0],
-            h: sizes && sizes[1]
-          }
-        });
-        break;
-
-      case 'image':
-        var hasMultipleImages = sizes && Array.isArray(sizes[0]);
-        var imageSizes = hasMultipleImages ? sizes : [sizes];
-
-        for (var i = 0; i < imageSizes.length; i++) {
-          assets.push({
-            id: i > 0 ? 10 + i : id,
-            required: required,
-            img: {
-              type: 3,
-              w: imageSizes[i][0],
-              h: imageSizes[i][1],
-              wmin: wmin,
-              hmin: hmin
-            }
-          });
-        }
-
-        break;
-
-      case 'body':
-        assets.push({
-          id: id,
-          required: required,
-          data: {
-            type: 2
-          }
-        });
-        break;
-
-      case 'sponsoredBy':
-        assets.push({
-          id: id,
-          required: required,
-          data: {
-            type: 1
-          }
-        });
-        break;
-    }
-  }
-
-  return assets;
-};
-
-/**
- * @param {object} slot Ad Unit Params by Prebid
- * @returns {object} native object that conforms to ortb native ads spec
- */
-const mapNative = (slot) => {
-  const native = deepAccess(slot, 'mediaTypes.native');
-  if (native) {
-    var nativeParams = Object.keys(native);
-    var assets = [];
-    nativeParams.forEach(function (par) {
-      var newAssets = mapAsset(par, native[par]);
-      assets = assets.concat(newAssets);
-    });
-    return {
-      request: JSON.stringify({
-        native: {
-          assets: assets
-        }
-      })
-    };
-  }
-}
-
-var mapVideo = (slot, videoFromBid) => {
-  var videoFromSlot = deepAccess(slot, 'mediaTypes.video');
-  var videoParamsUsed = ['api', 'context', 'linearity', 'maxduration', 'mimes', 'protocols', 'playbackmethod'];
-  var videoAssets;
-
-  if (videoFromSlot) {
-    const video = videoFromBid ? Object.assign(videoFromSlot, videoFromBid) : videoFromSlot;
-    var videoParams = Object.keys(video);
-    var playerSize = video.playerSize;
-    videoAssets = {}; // player width / height
-
-    if (playerSize) {
-      var maxSize = playerSize.reduce(function (prev, next) {
-        return next[0] >= prev[0] && next[1] >= prev[1] ? next : prev;
-      }, [1, 1]);
-      videoAssets.w = maxSize[0];
-      videoAssets.h = maxSize[1];
-    } // remaining supported params
-
-    videoParams.forEach(function (par) {
-      if (videoParamsUsed.indexOf(par) >= 0) {
-        videoAssets[par] = video[par];
-      }
-
-      ;
-    });
-  }
-
-  return videoAssets;
-};
-
-const mapImpression = slot => {
-  const { adUnitCode, bidId, params = {}, ortb2Imp = {} } = slot;
-  const { id, siteId, video } = params;
-  const { ext = {} } = ortb2Imp;
-
-  /*
-     check max size for this imp, and check/store number this size was called (for current view)
-     send this info as ext.pbsize
-  */
-  const slotSize = slot.sizes.length ? slot.sizes.reduce((prev, next) => prev[0] * prev[1] <= next[0] * next[1] ? next : prev).join('x') : '1x1';
-
-  if (!adUnitsCalled[adUnitCode]) {
-    // this is a new adunit - assign & save pbsize
-    adSizesCalled[slotSize] = adSizesCalled[slotSize] ? adSizesCalled[slotSize] += 1 : 1;
-    adUnitsCalled[adUnitCode] = `${slotSize}_${adSizesCalled[slotSize]}`;
-  }
-
-  ext.data = Object.assign({ pbsize: adUnitsCalled[adUnitCode] }, ext.data);
-
-  const imp = {
-    id: id && siteId ? id.padStart(3, '0') : 'bidid-' + bidId,
-    banner: mapBanner(slot),
-    native: mapNative(slot, bidId),
-    video: mapVideo(slot, video),
-    tagid: adUnitCode,
-    ext,
-  };
-
-  // Check floorprices for this imp
-  const { floor, currency } = getHighestFloor(slot);
-
-  imp.bidfloor = floor;
-  imp.bidfloorcur = currency;
-
-  return imp;
-}
-
 const isVideoAd = bid => {
   const xmlTester = new RegExp(/^<\?xml/);
   return bid.adm && bid.adm.match(xmlTester);
@@ -493,15 +415,20 @@ const isNativeAd = bid => {
   return bid.admNative || (bid.adm && bid.adm.match(xmlTester));
 }
 
-const parseNative = (nativeData) => {
+const parseNative = (nativeData, adUnitCode) => {
   const { link = {}, imptrackers: impressionTrackers, jstracker } = nativeData;
   const { url: clickUrl, clicktrackers: clickTrackers = [] } = link;
+  const macroReplacer = tracker => tracker.replace(new RegExp('%native_dom_id%', 'g'), adUnitCode);
+  let javascriptTrackers = isArray(jstracker) ? jstracker : jstracker && [jstracker];
+
+  // replace known macros in js trackers
+  javascriptTrackers = javascriptTrackers && javascriptTrackers.map(macroReplacer);
 
   const result = {
     clickUrl,
     clickTrackers,
     impressionTrackers,
-    javascriptTrackers: isArray(jstracker) ? jstracker : jstracker && [jstracker],
+    javascriptTrackers,
   };
 
   nativeData.assets.forEach(asset => {
@@ -541,81 +468,6 @@ const parseNative = (nativeData) => {
   return result;
 }
 
-const renderCreative = (site, auctionId, bid, seat, request) => {
-  let gam;
-
-  const mcad = {
-    id: auctionId,
-    seat,
-    seatbid: [{
-      bid: [bid],
-    }],
-  };
-
-  const mcbase = btoa(encodeURI(JSON.stringify(mcad)));
-
-  if (bid.adm) {
-    // parse adm for gam config
-    try {
-      gam = JSON.parse(bid.adm).gam;
-
-      if (!gam || !Object.keys(gam).length) {
-        gam = undefined;
-      } else {
-        gam.namedSizes = ['fluid'];
-        gam.div = 'div-gpt-ad-x01';
-        gam.targeting = Object.assign(gam.targeting || {}, {
-          OAS_retarg: '0',
-          PREBID_ON: '1',
-          emptygaf: '0',
-        });
-      }
-
-      if (gam && !gam.targeting) {
-        gam.targeting = {};
-      }
-    } catch (err) {
-      logWarn('Could not parse adm data', bid.adm);
-    }
-  }
-
-  let adcode = `<head>
-  <title></title>
-  <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-    body {
-    background-color: transparent;
-    margin: 0;
-    padding: 0;
-  }
-</style>
-  <script>
-  window.rekid = ${site.id};
-  window.slot = ${parseInt(site.slot, 10)};
-  window.responseTimestamp = ${Date.now()};
-  window.wp_sn = "${site.sn}";
-  window.mcad = JSON.parse(decodeURI(atob("${mcbase}")));
-  window.gdpr = ${JSON.stringify(request.gdprConsent)};
-  window.page = "${site.page}";
-  window.ref = "${site.ref}";
-  window.adlabel = "${site.adLabel ? site.adLabel : ''}";
-  window.pubid = "${site.publisherId ? site.publisherId : ''}";
-  window.requestPVID = "${pageView.id}";
-  `;
-
-  adcode += `</script>
-    </head>
-    <body>
-    <div id="c"></div>
-    <script async crossorigin nomodule src="https://std.wpcdn.pl/wpjslib/wpjslib-inline.js" id="wpjslib"></script>
-    <script async crossorigin type="module" src="https://std.wpcdn.pl/wpjslib6/wpjslib-inline.js" id="wpjslib6"></script>
-  </body>
-  </html>`;
-
-  return adcode;
-}
-
 const spec = {
   code: BIDDER_CODE,
   gvlid: GVLID,
@@ -626,48 +478,12 @@ const spec = {
     return true;
   },
   buildRequests(validBidRequests, bidderRequest) {
-    // convert Native ORTB definition to old-style prebid native definition
-    validBidRequests = convertOrtbRequestToProprietaryNative(validBidRequests);
-
     if ((!validBidRequests) || (validBidRequests.length < 1)) {
       return false;
     }
 
-    const siteId = setOnAny(validBidRequests, 'params.siteId');
-    const publisherId = setOnAny(validBidRequests, 'params.publisherId');
-    const page = setOnAny(validBidRequests, 'params.page') || bidderRequest.refererInfo.page;
-    const domain = setOnAny(validBidRequests, 'params.domain') || bidderRequest.refererInfo.domain;
-    const tmax = setOnAny(validBidRequests, 'params.tmax') ? parseInt(setOnAny(validBidRequests, 'params.tmax'), 10) : TMAX;
     const pbver = '$prebid.version$';
-    const testMode = setOnAny(validBidRequests, 'params.test') ? 1 : undefined;
-    const ref = bidderRequest.refererInfo.ref;
-
-    const payload = {
-      id: bidderRequest.auctionId,
-      site: {
-        id: siteId ? `${siteId}` : undefined,
-        publisher: publisherId ? { id: publisherId } : undefined,
-        page,
-        domain,
-        ref,
-        content: { language: getContentLanguage() },
-      },
-      imp: validBidRequests.map(slot => mapImpression(slot)),
-      cur: [getCurrency()],
-      tmax,
-      user: {},
-      regs: {},
-      device: {
-        language: getBrowserLanguage(),
-        w: screen.width,
-        h: screen.height,
-      },
-      test: testMode,
-    };
-
-    applyGdpr(bidderRequest, payload);
-    applyClientHints(payload);
-    applyUserIds(validBidRequests[0], payload);
+    const payload = converter.toORTB({ validBidRequests, bidderRequest });
 
     return {
       method: 'POST',
@@ -681,7 +497,7 @@ const spec = {
     const { bidderRequest } = request;
     const response = serverResponse.body;
     const bids = [];
-    let site = JSON.parse(request.data).site; // get page and referer data from request
+    let site = request.data ? JSON.parse(request.data).site : {}; // get page and referer data from request
     site.sn = response.sn || 'mc_adapter'; // WPM site name (wp_sn)
     pageView.sn = site.sn; // store site_name (for syncing and notifications)
     let seat;
@@ -697,7 +513,7 @@ const spec = {
           // get data from bid response
           const { adomain, crid = `mcad_${bidderRequest.auctionId}_${site.slot}`, impid, exp = 300, ext = {}, price, w, h } = serverBid;
 
-          const bidRequest = bidderRequest.bids.filter(b => {
+          let bidRequest = bidderRequest.bids.filter(b => {
             const { bidId, params: requestParams = {} } = b;
             const params = unpackParams(requestParams);
             const { id, siteId } = params;
@@ -724,6 +540,7 @@ const spec = {
 
           if (bidRequest && site.id && !strIncludes(site.id, 'bidid')) {
             // found a matching request; add this bid
+            const { adUnitCode } = bidRequest;
 
             // store site data for future notification
             oneCodeDetection[bidId] = [site.id, site.slot];
@@ -760,7 +577,7 @@ const spec = {
               // check native object
               try {
                 const nativeData = serverBid.admNative || JSON.parse(serverBid.adm).native;
-                bid.native = parseNative(nativeData);
+                bid.native = parseNative(nativeData, adUnitCode);
                 bid.width = 1;
                 bid.height = 1;
               } catch (err) {
@@ -770,7 +587,7 @@ const spec = {
             } else {
               // banner ad (default)
               bid.mediaType = 'banner';
-              bid.ad = renderCreative(site, response.id, serverBid, seat, bidderRequest);
+              bid.ad = serverBid.adm;
             }
 
             if (bid.cpm > 0) {
