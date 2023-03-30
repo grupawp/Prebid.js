@@ -101,10 +101,10 @@ const converter = ortbConverter({
     ttl: 300
   },
 
-  /*
   overrides: {
     // overrides are executed before processor
     // all processors are called for all impressions (banner, video, native for all imps)
+    /*
     imp: {
       banner(orig, imp, bidRequest, context) {
         logWarn('Override for banner', imp, bidRequest);
@@ -119,8 +119,11 @@ const converter = ortbConverter({
         orig(imp, bidRequest, context);
       },
     }
+   response: {
+
+   }
+   */
   },
-    */
 
   imp(buildImp, bidRequest, context) {
     const { bidId, adUnitCode, sizes, params = {} } = bidRequest;
@@ -188,6 +191,12 @@ const converter = ortbConverter({
 
     return request;
   },
+
+  response(buildResponse, bidResponses, ortbResponse, context) {
+    logWarn('Before bid response', arguments);
+    const bidResponse = buildResponse(bidResponses, ortbResponse, context);
+    return bidResponse;
+  }
 });
 
 /**
@@ -494,6 +503,9 @@ const spec = {
   },
 
   interpretResponse(serverResponse, request) {
+    const bidsFromConverter = converter.fromORTB({ response: serverResponse.body, request: request.data }).bids;
+    logWarn('Converting ortb response', bidsFromConverter);
+
     const { bidderRequest } = request;
     const response = serverResponse.body;
     const bids = [];
