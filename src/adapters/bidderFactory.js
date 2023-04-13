@@ -7,15 +7,15 @@ import { nativeBidIsValid } from '../native.js';
 import { isValidVideoBid } from '../video.js';
 import CONSTANTS from '../constants.json';
 import * as events from '../events.js';
-import {includes} from '../polyfill.js';
+import { includes } from '../polyfill.js';
 import { ajax } from '../ajax.js';
 import { logWarn, logInfo, logError, parseQueryStringParameters, delayExecution, parseSizesInput, flatten, uniques, timestamp, deepAccess, isArray, isPlainObject } from '../utils.js';
 import { ADPOD } from '../mediaTypes.js';
 import { getHook, hook } from '../hook.js';
 import { getCoreStorageManager } from '../storageManager.js';
-import {auctionManager} from '../auctionManager.js';
+import { auctionManager } from '../auctionManager.js';
 import { bidderSettings } from '../bidderSettings.js';
-import {useMetrics} from '../utils/perfMetrics.js';
+import { useMetrics } from '../utils/perfMetrics.js';
 
 export const storage = getCoreStorageManager('bidderFactory');
 
@@ -186,11 +186,11 @@ export function registerBidder(spec) {
  */
 export function newBidder(spec) {
   return Object.assign(new Adapter(spec.code), {
-    getSpec: function() {
+    getSpec: function () {
       return Object.freeze(spec);
     },
     registerSyncs,
-    callBids: function(bidderRequest, addBidResponse, done, ajax, onTimelyResponse, configEnabledCallback) {
+    callBids: function (bidderRequest, addBidResponse, done, ajax, onTimelyResponse, configEnabledCallback) {
       if (!Array.isArray(bidderRequest.bids)) {
         return;
       }
@@ -247,7 +247,9 @@ export function newBidder(spec) {
           fledgeAuctionConfigs.forEach((fledgeAuctionConfig) => {
             const bidRequest = bidRequestMap[fledgeAuctionConfig.bidId];
             if (bidRequest) {
+              const { adUnitCode } = bidRequest;
               addComponentAuction(bidRequest, fledgeAuctionConfig);
+              events.emit(CONSTANTS.EVENTS.FLEDGE_AUCTION, { adUnitCode, fledgeAuctionConfig });
             }
           });
         },
@@ -323,7 +325,7 @@ export function newBidder(spec) {
  * @param onBid {function({})} invoked once for each bid in the response - with the bid as returned by interpretResponse
  * @param onCompletion {function()} invoked once when all bid requests have been processed
  */
-export const processBidderRequests = hook('sync', function (spec, bids, bidderRequest, ajax, wrapCallback, {onRequest, onResponse, onFledgeAuctionConfigs, onError, onBid, onCompletion}) {
+export const processBidderRequests = hook('sync', function (spec, bids, bidderRequest, ajax, wrapCallback, { onRequest, onResponse, onFledgeAuctionConfigs, onError, onBid, onCompletion }) {
   const metrics = adapterMetrics(bidderRequest);
   onCompletion = metrics.startTiming('total').stopBefore(onCompletion);
 
@@ -348,7 +350,7 @@ export const processBidderRequests = hook('sync', function (spec, bids, bidderRe
     // If the server responds successfully, use the adapter code to unpack the Bids from it.
     // If the adapter code fails, no bids should be added. After all the bids have been added,
     // make sure to call the `requestDone` function so that we're one step closer to calling onCompletion().
-    const onSuccess = wrapCallback(function(response, responseObj) {
+    const onSuccess = wrapCallback(function (response, responseObj) {
       networkDone();
       try {
         response = JSON.parse(response);
@@ -448,7 +450,7 @@ export const processBidderRequests = hook('sync', function (spec, bids, bidderRe
   })
 }, 'processBidderRequests')
 
-export const registerSyncInner = hook('async', function(spec, responses, gdprConsent, uspConsent, gppConsent) {
+export const registerSyncInner = hook('async', function (spec, responses, gdprConsent, uspConsent, gppConsent) {
   const aliasSyncEnabled = config.getConfig('userSync.aliasSyncEnabled');
   if (spec.getUserSyncs && (aliasSyncEnabled || !adapterManager.aliasRegistry[spec.code])) {
     let filterConfig = config.getConfig('userSync.filterSettings');
@@ -544,7 +546,7 @@ export function getIabSubCategory(bidderCode, category) {
 }
 
 // check that the bid has a width and height set
-function validBidSize(adUnitCode, bid, {index = auctionManager.index} = {}) {
+function validBidSize(adUnitCode, bid, { index = auctionManager.index } = {}) {
   if ((bid.width || parseInt(bid.width, 10) === 0) && (bid.height || parseInt(bid.height, 10) === 0)) {
     bid.width = parseInt(bid.width, 10);
     bid.height = parseInt(bid.height, 10);
@@ -560,7 +562,7 @@ function validBidSize(adUnitCode, bid, {index = auctionManager.index} = {}) {
   // if a banner impression has one valid size, we assign that size to any bid
   // response that does not explicitly set width or height
   if (parsedSizes.length === 1) {
-    const [ width, height ] = parsedSizes[0].split('x');
+    const [width, height] = parsedSizes[0].split('x');
     bid.width = parseInt(width, 10);
     bid.height = parseInt(height, 10);
     return true;
@@ -570,7 +572,7 @@ function validBidSize(adUnitCode, bid, {index = auctionManager.index} = {}) {
 }
 
 // Validate the arguments sent to us by the adapter. If this returns false, the bid should be totally ignored.
-export function isValid(adUnitCode, bid, {index = auctionManager.index} = {}) {
+export function isValid(adUnitCode, bid, { index = auctionManager.index } = {}) {
   function hasValidKeys() {
     let bidKeys = Object.keys(bid);
     return COMMON_BID_RESPONSE_KEYS.every(key => includes(bidKeys, key) && !includes([undefined, null], bid[key]));
@@ -595,15 +597,15 @@ export function isValid(adUnitCode, bid, {index = auctionManager.index} = {}) {
     return false;
   }
 
-  if (FEATURES.NATIVE && bid.mediaType === 'native' && !nativeBidIsValid(bid, {index})) {
+  if (FEATURES.NATIVE && bid.mediaType === 'native' && !nativeBidIsValid(bid, { index })) {
     logError(errorMessage('Native bid missing some required properties.'));
     return false;
   }
-  if (bid.mediaType === 'video' && !isValidVideoBid(bid, {index})) {
+  if (bid.mediaType === 'video' && !isValidVideoBid(bid, { index })) {
     logError(errorMessage(`Video bid does not have required vastUrl or renderer property`));
     return false;
   }
-  if (bid.mediaType === 'banner' && !validBidSize(adUnitCode, bid, {index})) {
+  if (bid.mediaType === 'banner' && !validBidSize(adUnitCode, bid, { index })) {
     logError(errorMessage(`Banner bids require a width and height`));
     return false;
   }

@@ -686,6 +686,37 @@ const spec = {
     pageView.sn = site.sn; // store site_name (for syncing and notifications)
     let seat;
 
+    /* add fledge auction, if request is fledgeEnabled */
+    const fledgeAuctionConfigs = [];
+    const fledgeConfig = config.getConfig('fledgeConfig');
+    if (bidderRequest.fledgeEnabled && fledgeConfig) {
+      bidderRequest.bids.forEach(bid => {
+        const { seller, decisionLogicUrl } = fledgeConfig;
+        const { adUnitCode, bidId, sizes, ortb2Imp = {} } = bid;
+        const { ext = {} } = ortb2Imp;
+        const { ae } = ext;
+
+        const componentAuctionConfig = {
+          bidId,
+          seller,
+          decisionLogicUrl,
+          interestGroupBuyers: [
+            'https://fledge.wpcdn.pl',
+          ],
+          auctionSignals: {
+            bidRequestId: `${pageView.id}-${adUnitCode}`,
+            adUnitCode,
+            sizes,
+          }
+        };
+
+        if (ae) {
+          logWarn('Adding component auction', componentAuctionConfig)
+          fledgeAuctionConfigs.push(componentAuctionConfig);
+        }
+      });
+    }
+
     if (response.seatbid !== undefined) {
       /*
         Match response to request, by comparing bid id's
@@ -784,7 +815,7 @@ const spec = {
       });
     }
 
-    return bids;
+    return fledgeAuctionConfigs.length ? { bids, fledgeAuctionConfigs } : bids;
   },
   getUserSyncs(syncOptions, serverResponses, gdprConsent) {
     let mySyncs = [];
