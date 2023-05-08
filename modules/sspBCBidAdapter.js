@@ -4,7 +4,6 @@ import { config } from '../src/config.js';
 import { ortbConverter } from '../libraries/ortbConverter/converter.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { BANNER, NATIVE, VIDEO } from '../src/mediaTypes.js';
-import { includes as strIncludes } from '../src/polyfill.js';
 
 const BIDDER_CODE = 'sspBC';
 const BIDDER_URL = 'https://ssp.wp.pl/bidder/';
@@ -21,19 +20,6 @@ const adUnitsCalled = {};
 const adSizesCalled = {};
 const pageView = {};
 var consentApiVersion;
-
-/**
- * Native asset mapping - we use constant id per type
- * id > 10 indicates additional images
- */
-var nativeAssetMap = {
-  title: 0,
-  cta: 1,
-  icon: 2,
-  image: 3,
-  body: 4,
-  sponsoredBy: 5
-};
 
 /**
  * Get language of top level html object
@@ -93,7 +79,7 @@ const formatGDPR = payload => {
 };
 
 /**
- * opern rtb converter
+ * open rtb converter
  */
 const converter = ortbConverter({
   context: {
@@ -119,10 +105,13 @@ const converter = ortbConverter({
         orig(imp, bidRequest, context);
       },
     }
-   response: {
-
-   }
-   */
+    response: {
+      mediaType(orig, imp, bidRequest, context) {
+        logWarn('Override for mediaTypes', arguments);
+        orig(imp, bidRequest, context);
+      },
+    }
+    */
   },
 
   imp(buildImp, bidRequest, context) {
@@ -181,6 +170,7 @@ const converter = ortbConverter({
     request.site.content = { language: getContentLanguage() };
     request.test = isTest;
     request.tmax = TMAX;
+    request.cur = [getCurrency()];
 
     // add client hints and user IDs
     applyClientHints(request);
@@ -192,32 +182,27 @@ const converter = ortbConverter({
     return request;
   },
 
+  bidResponse(buildBidResponse, bid, context) {
+    logWarn('Before build bid', arguments);
+
+    // assign correct mediaType
+    if (isVideoAd(bid)) {
+      context.mediaType = 'video';
+    } else if (isNativeAd(bid)) {
+      context.mediaType = 'native';
+    } else {
+      context.mediaType = 'banner';
+    }
+
+    return buildBidResponse(bid, context)
+  },
+
   response(buildResponse, bidResponses, ortbResponse, context) {
-    logWarn('Before bid response', arguments);
+    logWarn('Before response', arguments);
     const bidResponse = buildResponse(bidResponses, ortbResponse, context);
     return bidResponse;
   }
 });
-
-/**
- * return native asset type, based on asset id
- * @param {int} id - native asset id
- * @returns {string} asset type
- */
-const getNativeAssetType = id => {
-  // id>10 will always be an image...
-  if (id > 10) {
-    return 'image';
-  }
-
-  // ...others should be decoded from nativeAssetMap
-  for (let assetName in nativeAssetMap) {
-    const assetId = nativeAssetMap[assetName];
-    if (assetId === id) {
-      return assetName;
-    }
-  }
-}
 
 /**
  * Get Bid parameters - returns bid params from Object, or 1el array
@@ -424,59 +409,6 @@ const isNativeAd = bid => {
   return bid.admNative || (bid.adm && bid.adm.match(xmlTester));
 }
 
-const parseNative = (nativeData, adUnitCode) => {
-  const { link = {}, imptrackers: impressionTrackers, jstracker } = nativeData;
-  const { url: clickUrl, clicktrackers: clickTrackers = [] } = link;
-  const macroReplacer = tracker => tracker.replace(new RegExp('%native_dom_id%', 'g'), adUnitCode);
-  let javascriptTrackers = isArray(jstracker) ? jstracker : jstracker && [jstracker];
-
-  // replace known macros in js trackers
-  javascriptTrackers = javascriptTrackers && javascriptTrackers.map(macroReplacer);
-
-  const result = {
-    clickUrl,
-    clickTrackers,
-    impressionTrackers,
-    javascriptTrackers,
-  };
-
-  nativeData.assets.forEach(asset => {
-    const { id, img = {}, title = {}, data = {} } = asset;
-    const { w: imgWidth, h: imgHeight, url: imgUrl, type: imgType } = img;
-    const { type: dataType, value: dataValue } = data;
-    const { text: titleText } = title;
-    const detectedType = getNativeAssetType(id);
-    if (titleText) {
-      result.title = titleText;
-    }
-    if (imgUrl) {
-      // image or icon
-      const thisImage = {
-        url: imgUrl,
-        width: imgWidth,
-        height: imgHeight,
-      };
-      if (imgType === 3 || detectedType === 'image') {
-        result.image = thisImage;
-      } else if (imgType === 1 || detectedType === 'icon') {
-        result.icon = thisImage;
-      }
-    }
-    if (dataValue) {
-      // call-to-action, sponsored-by or body
-      if (dataType === 1 || detectedType === 'sponsoredBy') {
-        result.sponsoredBy = dataValue;
-      } else if (dataType === 2 || detectedType === 'body') {
-        result.body = dataValue;
-      } else if (dataType === 12 || detectedType === 'cta') {
-        result.cta = dataValue;
-      }
-    }
-  });
-
-  return result;
-}
-
 const spec = {
   code: BIDDER_CODE,
   gvlid: GVLID,
@@ -498,122 +430,17 @@ const spec = {
       method: 'POST',
       url: `${BIDDER_URL}?bdver=${BIDDER_VERSION}&pbver=${pbver}&inver=0`,
       data: JSON.stringify(payload),
+      payload,
       bidderRequest,
     };
   },
 
   interpretResponse(serverResponse, request) {
-    const bidsFromConverter = converter.fromORTB({ response: serverResponse.body, request: request.data }).bids;
+    // const requestData = JSON.parse(request.data);
+    const bidsFromConverter = converter.fromORTB({ response: serverResponse.body, request: request.payload }).bids;
     logWarn('Converting ortb response', bidsFromConverter);
 
-    const { bidderRequest } = request;
-    const response = serverResponse.body;
-    const bids = [];
-    let site = request.data ? JSON.parse(request.data).site : {}; // get page and referer data from request
-    site.sn = response.sn || 'mc_adapter'; // WPM site name (wp_sn)
-    pageView.sn = site.sn; // store site_name (for syncing and notifications)
-    let seat;
-
-    if (response.seatbid !== undefined) {
-      /*
-        Match response to request, by comparing bid id's
-        'bidid-' prefix indicates oneCode (parameterless) request and response
-      */
-      response.seatbid.forEach(seatbid => {
-        seat = seatbid.seat;
-        seatbid.bid.forEach(serverBid => {
-          // get data from bid response
-          const { adomain, crid = `mcad_${bidderRequest.auctionId}_${site.slot}`, impid, exp = 300, ext = {}, price, w, h } = serverBid;
-
-          let bidRequest = bidderRequest.bids.filter(b => {
-            const { bidId, params: requestParams = {} } = b;
-            const params = unpackParams(requestParams);
-            const { id, siteId } = params;
-            const currentBidId = id && siteId ? id : 'bidid-' + bidId;
-            return currentBidId === impid;
-          })[0];
-
-          // get bidid from linked bidRequest
-          const { bidId } = bidRequest || {};
-
-          // get ext data from bid
-          const { siteid = site.id, slotid = site.slot, pubid, adlabel, cache: creativeCache, vurls = [] } = ext;
-
-          // update site data
-          site = {
-            ...site,
-            ...{
-              id: siteid,
-              slot: slotid,
-              publisherId: pubid,
-              adLabel: adlabel
-            }
-          };
-
-          if (bidRequest && site.id && !strIncludes(site.id, 'bidid')) {
-            // found a matching request; add this bid
-            const { adUnitCode } = bidRequest;
-
-            // store site data for future notification
-            oneCodeDetection[bidId] = [site.id, site.slot];
-
-            const bid = {
-              requestId: bidId,
-              creativeId: crid,
-              cpm: price,
-              currency: response.cur,
-              ttl: exp,
-              width: w,
-              height: h,
-              bidderCode: BIDDER_CODE,
-              meta: {
-                advertiserDomains: adomain,
-                networkName: seat,
-                pricepl: ext && ext.pricepl,
-              },
-              netRevenue: true,
-              vurls,
-            };
-
-            // mediaType and ad data for instream / native / banner
-            if (isVideoAd(serverBid)) {
-              // video
-              bid.adType = 'instream';
-              bid.mediaType = 'video';
-              bid.vastXml = serverBid.adm;
-              bid.vastContent = serverBid.adm;
-              bid.vastUrl = creativeCache;
-            } else if (isNativeAd(serverBid)) {
-              // native
-              bid.mediaType = 'native';
-              // check native object
-              try {
-                const nativeData = serverBid.admNative || JSON.parse(serverBid.adm).native;
-                bid.native = parseNative(nativeData, adUnitCode);
-                bid.width = 1;
-                bid.height = 1;
-              } catch (err) {
-                logWarn('Could not parse native data', serverBid.adm);
-                bid.cpm = 0;
-              }
-            } else {
-              // banner ad (default)
-              bid.mediaType = 'banner';
-              bid.ad = serverBid.adm;
-            }
-
-            if (bid.cpm > 0) {
-              // push this bid
-              bids.push(bid);
-            }
-          } else {
-            logWarn('Discarding response - no matching request / site id', serverBid.impid);
-          }
-        });
-      });
-    }
-
-    return bids;
+    return bidsFromConverter;
   },
   getUserSyncs(syncOptions, serverResponses, gdprConsent) {
     let mySyncs = [];
