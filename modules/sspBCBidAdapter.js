@@ -44,11 +44,19 @@ const formatNativePayload = payload => {
   try {
     const requestObject = JSON.parse(request);
     const { native, assets } = requestObject;
+
+    // change asset required 0/1 to false/true
+    assets.forEach(asset => asset.required = !!asset.required);
+
+    // repack assets
     if (assets && !native) {
       payload.request = JSON.stringify({
         native: { assets }
       });
     }
+
+    // remove ver property
+    payload.ver = undefined;
   } catch (err) {
     logWarn('Error reading native payload', err);
   }
@@ -227,6 +235,7 @@ const getNotificationPayload = bidData => {
         siteId: [],
         slotId: [],
         tagid: [],
+        adtype: bids[0].mediaType,
       }
       bids.forEach(bid => {
         const { adUnitCode, auctionId, cpm, creativeId, meta, params: bidParams, requestId, timeout } = bid;
