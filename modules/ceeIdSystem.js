@@ -1,7 +1,7 @@
 /**
- * This module adds pirId to the User ID module
+ * This module adds ceeId to the User ID module
  * The {@link module:modules/userId} module is required
- * @module modules/pirId
+ * @module modules/ceeId
  * @requires module:modules/userId
  */
 
@@ -11,11 +11,11 @@ import { submodule } from '../src/hook.js';
 import {domainOverrideToRootDomain} from '../libraries/domainOverrideToRootDomain/index.js';
 
 /**
- * @typedef {import('../modules/userId/index.js').Submodule} Submodule
- * @typedef {import('../modules/userId/index.js').IdResponse} IdResponse
+ * @typedef {import('./userId/index.js').Submodule} Submodule
+ * @typedef {import('./userId/index.js').IdResponse} IdResponse
  */
 
-const MODULE_NAME = 'pirId';
+const MODULE_NAME = 'ceeId';
 const ID_TOKEN = 'WPxid';
 export const storage = getStorageManager({ moduleName: MODULE_NAME, moduleType: MODULE_TYPE_UID });
 
@@ -26,7 +26,7 @@ export const storage = getStorageManager({ moduleName: MODULE_NAME, moduleType: 
 export const readId = () => storage.getDataFromLocalStorage(ID_TOKEN) || storage.getCookie(ID_TOKEN);
 
 /** @type {Submodule} */
-export const pirIdSubmodule = {
+export const ceeIdSubmodule = {
   name: MODULE_NAME,
   gvlid: 676,
 
@@ -37,26 +37,26 @@ export const pirIdSubmodule = {
    * @returns {(Object|undefined)}
    */
   decode(value) {
-    return typeof value === 'string' ? { 'pirId': value } : undefined;
+    return typeof value === 'string' ? { 'ceeId': value } : undefined;
   },
 
   /**
    * performs action to obtain id and return a value
    * @function
    * @returns {(IdResponse|undefined)}
-   */
+  */
   getId() {
-    const pirIdToken = readId();
+    const ceeIdToken = readId();
 
-    return pirIdToken ? { id: pirIdToken } : undefined;
+    return ceeIdToken ? { id: ceeIdToken } : undefined;
   },
   domainOverride: domainOverrideToRootDomain(storage, MODULE_NAME),
   eids: {
-    'pirId': {
-      source: 'pir.wp.pl',
+    'ceeId': {
+      source: 'ceeid.eu',
       atype: 1
     },
   },
 };
 
-submodule('userId', pirIdSubmodule);
+submodule('userId', ceeIdSubmodule);
