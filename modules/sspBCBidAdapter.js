@@ -1,6 +1,8 @@
+/* eslint-disable no-console */
 import { deepAccess, getWindowTop, isArray, logWarn } from '../src/utils.js';
 import { ajax } from '../src/ajax.js';
 import { config } from '../src/config.js';
+import { ortbConverter } from '../libraries/ortbConverter/converter.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { BANNER, NATIVE, VIDEO } from '../src/mediaTypes.js';
 import { includes as strIncludes } from '../src/polyfill.js';
@@ -22,6 +24,27 @@ const adSizesCalled = {};
 const bidderRequestsMap = {};
 const pageView = {};
 var consentApiVersion;
+
+/**
+ * ORTB converter settings
+ */
+const converter = ortbConverter({
+  context: {
+    netRevenue: true,
+    ttl: 300
+  },
+  request: function (buildRequest, imps, bidderRequest, context) {
+    const request = buildRequest(imps, bidderRequest, context);
+
+    // applyGdpr(bidderRequest, request);
+    applyClientHints(request);
+    applyTopics(bidderRequest, request);
+
+    console.log(`<------DBG converter------>        ${JSON.stringify(imps)}`, JSON.stringify(bidderRequest));
+
+    return request;
+  },
+});
 
 /**
  * Native asset mapping - we use constant id per type
@@ -235,8 +258,8 @@ const applyGdpr = (bidderRequest, ortbRequest) => {
   if (gdprConsent) {
     const { apiVersion, gdprApplies, consentString } = gdprConsent;
     consentApiVersion = apiVersion;
-    ortbRequest.regs = Object.assign(ortbRequest.regs, { 'gdpr': gdprApplies ? 1 : 0 });
-    ortbRequest.user = Object.assign(ortbRequest.user, { 'consent': consentString });
+    ortbRequest.regs = Object.assign(ortbRequest.regs || {}, { 'gdpr': gdprApplies ? 1 : 0 });
+    ortbRequest.user = Object.assign(ortbRequest.user || {}, { 'consent': consentString });
   }
 }
 
@@ -658,6 +681,8 @@ const spec = {
     return true;
   },
   buildRequests(validBidRequests, bidderRequest) {
+    const convertedPayload = converter.toORTB({bidderRequest, bidRequests: validBidRequests});
+
     // convert Native ORTB definition to old-style prebid native definition
     validBidRequests = convertOrtbRequestToProprietaryNative(validBidRequests);
 
@@ -703,6 +728,9 @@ const spec = {
     applyClientHints(payload);
     applyUserIds(validBidRequests[0], payload);
     applyTopics(bidderRequest, payload);
+
+    console.log(`<------DBG payload------>        ${JSON.stringify(payload)}`);
+    console.log(`<------DBG converted------>        ${JSON.stringify(convertedPayload)}`);
 
     return {
       method: 'POST',
