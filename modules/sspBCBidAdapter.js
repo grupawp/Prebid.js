@@ -36,11 +36,10 @@ const converter = ortbConverter({
   request: function (buildRequest, imps, bidderRequest, context) {
     const request = buildRequest(imps, bidderRequest, context);
 
-    // applyGdpr(bidderRequest, request);
     applyClientHints(request);
     applyTopics(bidderRequest, request);
 
-    console.log(`<------DBG converter------>        ${JSON.stringify(imps)}`, JSON.stringify(bidderRequest));
+    // console.log(`<------DBG converter------>        ${JSON.stringify(imps)}`, JSON.stringify(bidderRequest));
 
     return request;
   },
@@ -729,8 +728,11 @@ const spec = {
     applyUserIds(validBidRequests[0], payload);
     applyTopics(bidderRequest, payload);
 
-    console.log(`<------DBG payload------>        ${JSON.stringify(payload)}`);
-    console.log(`<------DBG converted------>        ${JSON.stringify(convertedPayload)}`);
+    // console.log(`<------DBG payload------>        ${JSON.stringify(payload)}`);
+    // console.log(`<------DBG converted------>        ${JSON.stringify(convertedPayload)}`);
+
+    logWarn('Pre 6.0 payload', payload);
+    logWarn('Post 6.0 payload', convertedPayload);
 
     return {
       method: 'POST',

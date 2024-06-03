@@ -35,7 +35,27 @@ describe('SSPBC adapter', function () {
         isServiceSpecific: true,
         publisherCC: 'PL'
       }
-    }
+    };
+    const ortb2 = {
+      regs: {
+        ext: {
+          gdpr: 1
+        }
+      },
+      user: {
+        ext: {
+          consent: gdprConsent.consentString,
+        },
+      },
+      site: {
+        domain: 'test.site.pl',
+        publisher: {
+          domain: 'site.pl'
+        },
+        page: 'https://test.site.pl/'
+      },
+      device: { language: 'en-US', w: 1728, h: 1117 },
+    };
     const bids = [{
       adUnitCode: 'test_wideboard',
       bidder: BIDDER_CODE,
@@ -233,21 +253,12 @@ describe('SSPBC adapter', function () {
         page: 'https://test.site.pl/',
         domain: 'test.site.pl',
         stack: ['https://test.site.pl/'],
-      }
+      },
+      ortb2,
     };
-    const bidRequestSingle = {
-      auctionId,
-      bidderCode: BIDDER_CODE,
-      bidderRequestId,
-      bids: [bids[0]],
-      gdprConsent,
-      refererInfo: {
-        reachedTop: true,
-        page: 'https://test.site.pl/',
-        domain: 'test.site.pl',
-        stack: ['https://test.site.pl/'],
-      }
-    };
+    const bidRequestSingle = Object.assign(bidRequest, {
+      bids: [bids[0]]
+    });
     const bidRequestNative = {
       auctionId,
       bidderCode: BIDDER_CODE,
