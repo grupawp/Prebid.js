@@ -14,7 +14,7 @@ const SYNC_URL = 'https://ssp.wp.pl/bidder/usersync';
 const NOTIFY_URL = 'https://ssp.wp.pl/bidder/notify';
 const GVLID = 676;
 const TMAX = 450;
-const BIDDER_VERSION = '5.93';
+const BIDDER_VERSION = '6.00';
 const DEFAULT_CURRENCY = 'PLN';
 const W = window;
 const { navigator } = W;
@@ -33,13 +33,41 @@ const converter = ortbConverter({
     netRevenue: true,
     ttl: 300
   },
+  imp(buildImp, bidRequest, context) {
+    const imp = buildImp(bidRequest, context);
+    const { adUnitCode, params = {}, sizes } = bidRequest;
+    const { ext = {} } = imp;
+    const { data = {} } = ext;
+
+    /*
+      Check slot size for this imp
+      send it in request, and update 'sizes used' map
+    */
+    const slotSize = sizes.length ? sizes.reduce((prev, next) => prev[0] * prev[1] <= next[0] * next[1] ? next : prev).join('x') : '1x1';
+    if (!adUnitsCalled[adUnitCode]) {
+      // this is a new adunit - assign & save pbsize
+      adSizesCalled[slotSize] = adSizesCalled[slotSize] ? adSizesCalled[slotSize] += 1 : 1;
+      adUnitsCalled[adUnitCode] = `${slotSize}_${adSizesCalled[slotSize]}`;
+    }
+
+    imp.tagid = adUnitCode;
+    data.pbsize = adUnitsCalled[adUnitCode];
+    data.slotid = params.id;
+
+    logWarn('ortbConverter.imp', buildImp, bidRequest);
+    return imp;
+  },
   request: function (buildRequest, imps, bidderRequest, context) {
     const request = buildRequest(imps, bidderRequest, context);
 
+    request.cur = [getCurrency()];
+    request.test = setOnAny(bidderRequest.bids, 'params.test') ? 1 : undefined;
+    request.site.id = setOnAny(bidderRequest.bids, 'params.siteId');
+    request.site.content = { language: getContentLanguage() };
+
     applyClientHints(request);
     applyTopics(bidderRequest, request);
-
-    // console.log(`<------DBG converter------>        ${JSON.stringify(imps)}`, JSON.stringify(bidderRequest));
+    applyUserIds(bidderRequest, request);
 
     return request;
   },
@@ -184,7 +212,7 @@ const applyClientHints = ortbRequest => {
 
   /**
     Check / generate page view id
-    Should be generated dureing first call to applyClientHints(),
+    Should be generated during first call to applyClientHints(),
     and re-generated if pathname has changed
    */
   if (!pageView.id || location.pathname !== pageView.path) {
@@ -680,7 +708,7 @@ const spec = {
     return true;
   },
   buildRequests(validBidRequests, bidderRequest) {
-    const convertedPayload = converter.toORTB({bidderRequest, bidRequests: validBidRequests});
+    const convertedPayload = converter.toORTB({ bidderRequest, bidRequests: validBidRequests });
 
     // convert Native ORTB definition to old-style prebid native definition
     validBidRequests = convertOrtbRequestToProprietaryNative(validBidRequests);
@@ -737,7 +765,7 @@ const spec = {
     return {
       method: 'POST',
       url: `${BIDDER_URL}?bdver=${BIDDER_VERSION}&pbver=${pbver}&inver=0`,
-      data: JSON.stringify(payload),
+      data: JSON.stringify(convertedPayload),
       bidderRequest,
     };
   },
