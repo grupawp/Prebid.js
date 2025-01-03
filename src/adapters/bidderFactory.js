@@ -1,13 +1,13 @@
 import Adapter from '../adapter.js';
 import adapterManager from '../adapterManager.js';
-import {config} from '../config.js';
-import {createBid} from '../bidfactory.js';
-import {userSync} from '../userSync.js';
-import {nativeBidIsValid} from '../native.js';
-import {isValidVideoBid} from '../video.js';
+import { config } from '../config.js';
+import { createBid } from '../bidfactory.js';
+import { userSync } from '../userSync.js';
+import { nativeBidIsValid } from '../native.js';
+import { isValidVideoBid } from '../video.js';
 import { EVENTS, STATUS, REJECTION_REASON } from '../constants.js';
 import * as events from '../events.js';
-import {includes} from '../polyfill.js';
+import { includes } from '../polyfill.js';
 import {
   delayExecution,
   isArray,
@@ -18,14 +18,14 @@ import {
   parseSizesInput, pick,
   uniques
 } from '../utils.js';
-import {hook} from '../hook.js';
-import {auctionManager} from '../auctionManager.js';
-import {bidderSettings} from '../bidderSettings.js';
-import {useMetrics} from '../utils/perfMetrics.js';
-import {isActivityAllowed} from '../activities/rules.js';
-import {activityParams} from '../activities/activityParams.js';
-import {MODULE_TYPE_BIDDER} from '../activities/modules.js';
-import {ACTIVITY_TRANSMIT_TID, ACTIVITY_TRANSMIT_UFPD} from '../activities/activities.js';
+import { hook } from '../hook.js';
+import { auctionManager } from '../auctionManager.js';
+import { bidderSettings } from '../bidderSettings.js';
+import { useMetrics } from '../utils/perfMetrics.js';
+import { isActivityAllowed } from '../activities/rules.js';
+import { activityParams } from '../activities/activityParams.js';
+import { MODULE_TYPE_BIDDER } from '../activities/modules.js';
+import { ACTIVITY_TRANSMIT_TID, ACTIVITY_TRANSMIT_UFPD } from '../activities/activities.js';
 
 /**
  * @typedef {import('../mediaTypes.js').MediaType} MediaType
@@ -190,7 +190,7 @@ export function registerBidder(spec) {
   }
 }
 
-export const guardTids = memoize(({bidderCode}) => {
+export const guardTids = memoize(({ bidderCode }) => {
   if (isActivityAllowed(ACTIVITY_TRANSMIT_TID, activityParams(MODULE_TYPE_BIDDER, bidderCode))) {
     return {
       bidRequest: (br) => br,
@@ -211,7 +211,7 @@ export const guardTids = memoize(({bidderCode}) => {
       .forEach(([prop, fn]) => proxy[prop] = fn.bind(target));
     return proxy;
   }
-  const bidRequest = memoize((br) => privateAccessProxy(br, {get}), (arg) => arg.bidId);
+  const bidRequest = memoize((br) => privateAccessProxy(br, { get }), (arg) => arg.bidId);
   /**
    * Return a view on bidd(er) requests where auctionId/transactionId are nulled if the bidder is not allowed `transmitTid`.
    *
@@ -238,11 +238,11 @@ export const guardTids = memoize(({bidderCode}) => {
  */
 export function newBidder(spec) {
   return Object.assign(new Adapter(spec.code), {
-    getSpec: function() {
+    getSpec: function () {
       return Object.freeze(Object.assign({}, spec));
     },
     registerSyncs,
-    callBids: function(bidderRequest, addBidResponse, done, ajax, onTimelyResponse, configEnabledCallback) {
+    callBids: function (bidderRequest, addBidResponse, done, ajax, onTimelyResponse, configEnabledCallback) {
       if (!Array.isArray(bidderRequest.bids)) {
         return;
       }
@@ -380,7 +380,7 @@ const RESPONSE_PROPS = ['bids', 'paapi']
  * @param onBid {function({})} invoked once for each bid in the response - with the bid as returned by interpretResponse
  * @param onCompletion {function()} invoked once when all bid requests have been processed
  */
-export const processBidderRequests = hook('sync', function (spec, bids, bidderRequest, ajax, wrapCallback, {onRequest, onResponse, onPaapi, onError, onBid, onCompletion}) {
+export const processBidderRequests = hook('sync', function (spec, bids, bidderRequest, ajax, wrapCallback, { onRequest, onResponse, onPaapi, onError, onBid, onCompletion }) {
   const metrics = adapterMetrics(bidderRequest);
   onCompletion = metrics.startTiming('total').stopBefore(onCompletion);
   const tidGuard = guardTids(bidderRequest);
@@ -405,7 +405,7 @@ export const processBidderRequests = hook('sync', function (spec, bids, bidderRe
     // If the server responds successfully, use the adapter code to unpack the Bids from it.
     // If the adapter code fails, no bids should be added. After all the bids have been added,
     // make sure to call the `requestDone` function so that we're one step closer to calling onCompletion().
-    const onSuccess = wrapCallback(function(response, responseObj) {
+    const onSuccess = wrapCallback(function (response, responseObj) {
       networkDone();
       try {
         response = JSON.parse(response);
@@ -520,13 +520,23 @@ export const processBidderRequests = hook('sync', function (spec, bids, bidderRe
   })
 }, 'processBidderRequests')
 
-export const registerSyncInner = hook('async', function(spec, responses, gdprConsent, uspConsent, gppConsent) {
+export const registerSyncInner = hook('async', function (spec, responses, gdprConsent, uspConsent, gppConsent) {
+  const bidderHasPermission = (bidderCode, filterConfig = {}, permissionFor) => {
+    const filterEntry = filterConfig[permissionFor] || filterConfig.all;
+
+    if (filterEntry) {
+      const { bidders } = filterEntry;
+
+      return bidders === '*' || bidders === bidderCode || (isArray(bidders) && bidders.includes(bidderCode));
+    }
+  }
+
   const aliasSyncEnabled = config.getConfig('userSync.aliasSyncEnabled');
   if (spec.getUserSyncs && (aliasSyncEnabled || !adapterManager.aliasRegistry[spec.code])) {
     let filterConfig = config.getConfig('userSync.filterSettings');
     let syncs = spec.getUserSyncs({
-      iframeEnabled: !!(filterConfig && (filterConfig.iframe || filterConfig.all)),
-      pixelEnabled: !!(filterConfig && (filterConfig.image || filterConfig.all)),
+      iframeEnabled: bidderHasPermission(spec.code, filterConfig, 'iframe'),
+      pixelEnabled: bidderHasPermission(spec.code, filterConfig, 'image')
     }, responses, gdprConsent, uspConsent, gppConsent);
     if (syncs) {
       if (!Array.isArray(syncs)) {
@@ -544,7 +554,7 @@ export const addPaapiConfig = hook('sync', (request, paapiConfig) => {
 }, 'addPaapiConfig');
 
 // check that the bid has a width and height set
-function validBidSize(adUnitCode, bid, {index = auctionManager.index} = {}) {
+function validBidSize(adUnitCode, bid, { index = auctionManager.index } = {}) {
   if ((bid.width || parseInt(bid.width, 10) === 0) && (bid.height || parseInt(bid.height, 10) === 0)) {
     bid.width = parseInt(bid.width, 10);
     bid.height = parseInt(bid.height, 10);
@@ -560,7 +570,7 @@ function validBidSize(adUnitCode, bid, {index = auctionManager.index} = {}) {
   // if a banner impression has one valid size, we assign that size to any bid
   // response that does not explicitly set width or height
   if (parsedSizes.length === 1) {
-    const [ width, height ] = parsedSizes[0].split('x');
+    const [width, height] = parsedSizes[0].split('x');
     bid.width = parseInt(width, 10);
     bid.height = parseInt(height, 10);
     return true;
@@ -570,7 +580,7 @@ function validBidSize(adUnitCode, bid, {index = auctionManager.index} = {}) {
 }
 
 // Validate the arguments sent to us by the adapter. If this returns false, the bid should be totally ignored.
-export function isValid(adUnitCode, bid, {index = auctionManager.index} = {}) {
+export function isValid(adUnitCode, bid, { index = auctionManager.index } = {}) {
   function hasValidKeys() {
     let bidKeys = Object.keys(bid);
     return COMMON_BID_RESPONSE_KEYS.every(key => includes(bidKeys, key) && !includes([undefined, null], bid[key]));
@@ -595,15 +605,15 @@ export function isValid(adUnitCode, bid, {index = auctionManager.index} = {}) {
     return false;
   }
 
-  if (FEATURES.NATIVE && bid.mediaType === 'native' && !nativeBidIsValid(bid, {index})) {
+  if (FEATURES.NATIVE && bid.mediaType === 'native' && !nativeBidIsValid(bid, { index })) {
     logError(errorMessage('Native bid missing some required properties.'));
     return false;
   }
-  if (FEATURES.VIDEO && bid.mediaType === 'video' && !isValidVideoBid(bid, {index})) {
+  if (FEATURES.VIDEO && bid.mediaType === 'video' && !isValidVideoBid(bid, { index })) {
     logError(errorMessage(`Video bid does not have required vastUrl or renderer property`));
     return false;
   }
-  if (bid.mediaType === 'banner' && !validBidSize(adUnitCode, bid, {index})) {
+  if (bid.mediaType === 'banner' && !validBidSize(adUnitCode, bid, { index })) {
     logError(errorMessage(`Banner bids require a width and height`));
     return false;
   }
