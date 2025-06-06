@@ -742,14 +742,14 @@ describe('SSPBC adapter', function () {
       expect(request.method).to.equal('POST');
     });
 
-    it('should create one imp object per bid', function () {
-      expect(payload.imp.length).to.equal(bids.length);
-      expect(payloadSingle.imp.length).to.equal(1);
-    });
-
     it('should contain prebid and bidder versions', function () {
       expect(request.url).to.contain('bdver');
       expect(request.url).to.contain('pbver=$prebid.version$');
+    });
+
+    it('should create one imp object per bid', function () {
+      expect(payload.imp.length).to.equal(bids.length);
+      expect(payloadSingle.imp.length).to.equal(1);
     });
 
     it('should save bidder request data', function () {
@@ -830,7 +830,7 @@ describe('SSPBC adapter', function () {
 
     it('should build correct video payload', function () {
       const videoAssets = payloadVideo.imp && payloadVideo.imp[0].video;
-      videoAssets
+
       expect(payloadVideo.imp.length).to.equal(1);
       expect(videoAssets).to.have.property('context').that.equals('instream');
       expect(videoAssets).to.have.property('maxduration').that.equals(30);
@@ -867,6 +867,7 @@ describe('SSPBC adapter', function () {
       const bidWithSupplyChain = Object.assign(bids[0], { schain: supplyChain });
       const requestWithSupplyChain = spec.buildRequests(bidWithSupplyChain, syncAddFPDToBidderRequest(bidRequest));
       const payloadWithSupplyChain = requestWithSupplyChain ? requestWithSupplyChain.data : { site: false, imp: false };
+
       expect(payloadWithSupplyChain.source.ext).to.have.property('schain').that.has.keys('ver', 'complete', 'nodes');
     });
   });
@@ -876,6 +877,8 @@ describe('SSPBC adapter', function () {
     const request = spec.buildRequests(bids, bidRequest);
     const requestSingle = spec.buildRequests([bids[0]], bidRequestSingle);
     const requestOneCode = spec.buildRequests([bid_OneCode], bidRequestOneCode);
+    const requestVideo = spec.buildRequests([bid_video], bidRequestVideo);
+    const requestNative = spec.buildRequests([bid_native], bidRequestNative);
 
     it('should handle nobid responses', function () {
       let result = spec.interpretResponse(emptyResponse, request);
@@ -917,7 +920,6 @@ describe('SSPBC adapter', function () {
     });
 
     it('should create a correct video bid', function () {
-      const requestVideo = spec.buildRequests(bid_video, bidRequestVideo);
       let resultVideo = spec.interpretResponse(serverResponseVideo, requestVideo);
 
       expect(resultVideo.length).to.equal(1);
@@ -934,7 +936,6 @@ describe('SSPBC adapter', function () {
     });
 
     it('should create a correct native bid', function () {
-      const requestNative = spec.buildRequests(bid_native, syncAddFPDToBidderRequest(bidRequestNative));
       let resultNative = spec.interpretResponse(serverResponseNative, requestNative);
 
       expect(resultNative.length).to.equal(1);
