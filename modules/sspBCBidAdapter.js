@@ -1,4 +1,4 @@
-import { getWindowTop, isArray, logWarn } from '../src/utils.js';
+import { getWinDimensions, getWindowTop, isArray, logWarn } from '../src/utils.js';
 import { ajax } from '../src/ajax.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { BANNER, NATIVE, VIDEO } from '../src/mediaTypes.js';
@@ -12,11 +12,68 @@ const SYNC_URL_IMAGE = 'https://ssp.wp.pl/v1/sync/pixel';
 const NOTIFY_URL = 'https://ssp.wp.pl/bidder/notify';
 const GVLID = 676;
 const BIDDER_VERSION = '7.00';
+const W = window;
 const oneCodeDetection = {};
 const adUnitsCalled = {};
 const adSizesCalled = {};
 const bidderRequestsMap = {};
 const pageView = {};
+
+const applyClientHints = ortbRequest => {
+  const { location } = document;
+  const { connection = {}, deviceMemory, userAgentData = {} } = navigator;
+  const viewport = getWinDimensions().visualViewport || false;
+  const segments = [];
+  const hints = {
+    'CH-Ect': connection.effectiveType,
+    'CH-Rtt': connection.rtt,
+    'CH-SaveData': connection.saveData,
+    'CH-Downlink': connection.downlink,
+    'CH-DeviceMemory': deviceMemory,
+    'CH-Dpr': W.devicePixelRatio,
+    'CH-ViewportWidth': viewport.width,
+    'CH-BrowserBrands': JSON.stringify(userAgentData.brands),
+    'CH-isMobile': userAgentData.mobile,
+  };
+
+  /**
+    Check / generate page view id
+    Should be generated dureing first call to applyClientHints(),
+    and re-generated if pathname has changed
+   */
+  if (!pageView.id || location.pathname !== pageView.path) {
+    pageView.path = location.pathname;
+    pageView.id = Math.floor(1E20 * Math.random()).toString();
+  }
+
+  Object.keys(hints).forEach(key => {
+    const hint = hints[key];
+
+    if (hint) {
+      segments.push({
+        name: key,
+        value: hint.toString(),
+      });
+    }
+  });
+  const data = [
+    {
+      id: '12',
+      name: 'NetInfo',
+      segment: segments,
+    }, {
+      id: '7',
+      name: 'pvid',
+      segment: [
+        {
+          value: pageView.id
+        }
+      ]
+    }];
+
+  const ch = { data };
+  ortbRequest.user = { ...ortbRequest.user, ...ch };
+};
 
 const converter = ortbConverter({
   context: {
@@ -30,7 +87,7 @@ const converter = ortbConverter({
   },
   imp(buildImp, bidRequest, context) {
     const imp = buildImp(bidRequest, context);
-    const { adUnitCode, sizes, params } = bidRequest;
+    const { adUnitCode, sizes, params = {} } = bidRequest;
     const { id = '' } = params;
     const slotSize = sizes.length ? sizes.reduce((prev, next) => prev[0] * prev[1] <= next[0] * next[1] ? next : prev).join('x') : '1x1';
 
@@ -49,9 +106,11 @@ const converter = ortbConverter({
     const req = buildRequest(imps, bidderRequest, context);
     const { site = {}, refererInfo = {} } = req;
     const { bids } = bidderRequest;
-    const { params } = bids[0];
+    const { params = {} } = bids[0];
     const { siteId } = params;
     const { ref } = refererInfo;
+
+    applyClientHints(req);
 
     site.id = siteId;
     site.content = { language: getContentLanguage() };
