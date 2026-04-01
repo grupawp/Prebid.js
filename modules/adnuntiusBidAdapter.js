@@ -1,22 +1,69 @@
 import { registerBidder } from '../src/adapters/bidderFactory.js';
-import {BANNER, VIDEO, NATIVE} from '../src/mediaTypes.js';
-import {isStr, isEmpty, deepAccess, getUnixTimestampFromNow, convertObjectToArray, getWindowTop} from '../src/utils.js';
+import { BANNER, NATIVE, VIDEO } from '../src/mediaTypes.js';
+import {
+  convertObjectToArray,
+  deepAccess,
+  deepClone,
+  getUnixTimestampFromNow,
+  getWinDimensions,
+  isArray,
+  isPlainObject,
+  isEmpty,
+  isStr
+} from '../src/utils.js';
 import { config } from '../src/config.js';
 import { getStorageManager } from '../src/storageManager.js';
+import { toLegacyResponse, toOrtbNativeRequest } from '../src/native.js';
+import { getGlobal } from '../src/prebidGlobal.js';
 
 const BIDDER_CODE = 'adnuntius';
 const BIDDER_CODE_DEAL_ALIAS_BASE = 'adndeal';
 const BIDDER_CODE_DEAL_ALIASES = [1, 2, 3, 4, 5].map(num => {
   return BIDDER_CODE_DEAL_ALIAS_BASE + num;
 });
-const ENDPOINT_URL = 'https://ads.adnuntius.delivery/i';
-const ENDPOINT_URL_EUROPE = 'https://europe.delivery.adnuntius.com/i';
 const GVLID = 855;
 const SUPPORTED_MEDIA_TYPES = [BANNER, VIDEO, NATIVE];
 const MAXIMUM_DEALS_LIMIT = 5;
 const VALID_BID_TYPES = ['netBid', 'grossBid'];
 const METADATA_KEY = 'adn.metaData';
 const METADATA_KEY_SEPARATOR = '@@@';
+const UNSPECIFIED_NETWORK = 'unspecified-network-id';
+
+const ENVS = {
+  localhost: {
+    id: 'localhost',
+    as: 'localhost:8078'
+  },
+  lcl: {
+    id: 'lcl',
+    as: 'adserver.dev.lcl.test'
+  },
+  andemu: {
+    id: 'andemu',
+    as: '10.0.2.2:8078'
+  },
+  dev: {
+    id: 'dev',
+    as: 'adserver.dev.adnuntius.com'
+  },
+  staging: {
+    id: 'staging',
+    as: 'adserver.staging.adnuntius.com'
+  },
+  production: {
+    id: 'production',
+    as: 'ads.adnuntius.delivery',
+    asEu: 'europe.delivery.adnuntius.com'
+  },
+  cloudflare: {
+    id: 'cloudflare',
+    as: 'ads.adnuntius.delivery'
+  },
+  limited: {
+    id: 'limited',
+    as: 'limited.delivery.adnuntius.com'
+  }
+};
 
 export const misc = {
   findHighestPrice: function(arr, bidType) {
@@ -119,28 +166,34 @@ const storageTool = (function () {
     storage.setDataInLocalStorage(METADATA_KEY, JSON.stringify(metaDataForSaving));
   };
 
-  const getUsi = function (meta, ortb2, bidParams) {
-    // Fetch user id from parameters.
-    for (let i = 0; i < bidParams.length; i++) {
-      const bidParam = bidParams[i];
-      if (bidParam.userId) {
-        return bidParam.userId;
-      }
-    }
-    if (ortb2 && ortb2.user && ortb2.user.id) {
-      return ortb2.user.id
-    }
-    return (meta && meta.usi) ? meta.usi : false
-  }
+  const getFirstValidValueFromArray = function(arr, param) {
+    const example = (arr || []).find((b) => {
+      return deepAccess(b, param);
+    });
+    return example ? deepAccess(example, param) : undefined;
+  };
 
   return {
-    refreshStorage: function (bidderRequest) {
-      const ortb2 = bidderRequest.ortb2 || {};
+    refreshStorage: function (validBidRequests, bidderRequest) {
       const bidParams = (bidderRequest.bids || []).map((b) => {
         return b.params ? b.params : {};
       });
       metaInternal = getMetaDataFromLocalStorage(bidParams).reduce((a, entry) => ({ ...a, [entry.key]: entry.value }), {});
-      metaInternal.usi = getUsi(metaInternal, ortb2, bidParams);
+      const bidParamUserId = getFirstValidValueFromArray(bidParams, 'userId');
+      const ortb2 = bidderRequest.ortb2 || {};
+
+      if (isStr(bidParamUserId)) {
+        metaInternal.usi = bidParamUserId;
+      } else if (isStr(ortb2?.user?.id)) {
+        metaInternal.usi = ortb2.user.id;
+      }
+
+      const unvettedOrtb2Eids = getFirstValidValueFromArray(bidParams, 'userIdAsEids') || deepAccess(ortb2, 'user.ext.eids');
+      const vettedOrtb2Eids = isArray(unvettedOrtb2Eids) && unvettedOrtb2Eids.length > 0 ? unvettedOrtb2Eids : false;
+      if (vettedOrtb2Eids) {
+        metaInternal.eids = vettedOrtb2Eids;
+      }
+
       if (!metaInternal.usi) {
         delete metaInternal.usi;
       }
@@ -155,8 +208,8 @@ const storageTool = (function () {
     },
     getUrlRelatedData: function () {
       // getting the URL information is theoretically not network-specific
-      const { usi, voidAuIdsArray } = metaInternal;
-      return { usi, voidAuIdsArray };
+      const { usi, voidAuIdsArray, eids } = metaInternal;
+      return { usi, voidAuIdsArray, eids };
     },
     getPayloadRelatedData: function (network) {
       // getting the payload data should be network-specific
@@ -169,13 +222,14 @@ const storageTool = (function () {
 const targetingTool = (function() {
   const getSegmentsFromOrtb = function(bidderRequest) {
     const userData = deepAccess(bidderRequest.ortb2 || {}, 'user.data');
-    let segments = [];
+    const segments = [];
     if (userData && Array.isArray(userData)) {
       userData.forEach(userdat => {
         if (userdat.segment) {
           segments.push(...userdat.segment.map((segment) => {
             if (isStr(segment)) return segment;
             if (isStr(segment.id)) return segment.id;
+            return undefined;
           }).filter((seg) => !!seg));
         }
       });
@@ -202,10 +256,25 @@ const targetingTool = (function() {
 
       existingUrlRelatedData.segments = segments;
     },
-    mergeKvsFromOrtb: function(bidTargeting, bidderRequest) {
-      const siteKvs = getKvsFromOrtb(bidderRequest || {}, 'site.ext.data');
-      const userKvs = getKvsFromOrtb(bidderRequest || {}, 'user.ext.data');
-      if (isEmpty(siteKvs) && isEmpty(userKvs)) {
+    mergeKvsFromOrtb: function(bidTargeting, bidderRequest, bid) {
+      function sanitizeKeyValues(kvs) {
+        return Object.keys(kvs || {}).reduce((acc, key) => {
+          const value = kvs[key];
+          if (isArray(value)) {
+            acc[key] = value.map(v => {
+              return isPlainObject(v) ? JSON.stringify(v) : v;
+            });
+            return acc;
+          }
+          acc[key] = value;
+          return acc;
+        }, {});
+      }
+
+      const siteKvs = sanitizeKeyValues(getKvsFromOrtb(bidderRequest || {}, 'site.ext.data'));
+      const userKvs = sanitizeKeyValues(getKvsFromOrtb(bidderRequest || {}, 'user.ext.data'));
+      const impKvs = sanitizeKeyValues(deepAccess(bid, 'ortb2Imp.ext.data'));
+      if (isEmpty(siteKvs) && isEmpty(userKvs) && isEmpty(impKvs)) {
         return;
       }
       if (bidTargeting.kv && !Array.isArray(bidTargeting.kv)) {
@@ -217,6 +286,9 @@ const targetingTool = (function() {
       }
       if (!isEmpty(userKvs)) {
         bidTargeting.kv = bidTargeting.kv.concat(convertObjectToArray(userKvs));
+      }
+      if (!isEmpty(impKvs)) {
+        bidTargeting.kv = bidTargeting.kv.concat(convertObjectToArray(impKvs));
       }
     }
   }
@@ -245,17 +317,17 @@ export const spec = {
     queryParamsAndValues.push('format=prebid')
     const gdprApplies = deepAccess(bidderRequest, 'gdprConsent.gdprApplies');
     const consentString = deepAccess(bidderRequest, 'gdprConsent.consentString');
+    queryParamsAndValues.push('pbv=' + getGlobal().version);
     if (gdprApplies !== undefined) {
       const flag = gdprApplies ? '1' : '0'
       queryParamsAndValues.push('consentString=' + consentString);
       queryParamsAndValues.push('gdpr=' + flag);
     }
-    const win = getWindowTop() || window;
-    if (win.screen && win.screen.availHeight) {
-      queryParamsAndValues.push('screen=' + win.screen.availWidth + 'x' + win.screen.availHeight);
-    }
-    if (win.innerWidth) {
-      queryParamsAndValues.push('viewport=' + win.innerWidth + 'x' + win.innerHeight);
+
+    const { innerWidth, innerHeight } = getWinDimensions();
+
+    if (innerWidth) {
+      queryParamsAndValues.push('viewport=' + innerWidth + 'x' + innerHeight);
     }
 
     const searchParams = new URLSearchParams(window.location.search);
@@ -263,12 +335,13 @@ export const spec = {
       queryParamsAndValues.push('so=' + searchParams.get('script-override'));
     }
 
-    storageTool.refreshStorage(bidderRequest);
+    storageTool.refreshStorage(validBidRequests, bidderRequest);
 
     const urlRelatedMetaData = storageTool.getUrlRelatedData();
     targetingTool.addSegmentsToUrlData(validBidRequests, bidderRequest, urlRelatedMetaData);
     if (urlRelatedMetaData.segments.length > 0) queryParamsAndValues.push('segments=' + urlRelatedMetaData.segments.join(','));
     if (urlRelatedMetaData.usi) queryParamsAndValues.push('userId=' + urlRelatedMetaData.usi);
+    if (isArray(urlRelatedMetaData.eids) && urlRelatedMetaData.eids.length > 0) queryParamsAndValues.push('eids=' + encodeURIComponent(JSON.stringify(urlRelatedMetaData.eids)));
 
     const bidderConfig = config.getConfig();
     if (bidderConfig.useCookie === false) queryParamsAndValues.push('noCookies=true');
@@ -285,7 +358,7 @@ export const spec = {
         continue;
       }
 
-      let network = bid.params.network || 'network';
+      const network = bid.params.network || UNSPECIFIED_NETWORK;
       bidRequests[network] = bidRequests[network] || [];
       bidRequests[network].push(bid);
 
@@ -305,8 +378,8 @@ export const spec = {
         networks[network].metaData = payloadRelatedData;
       }
 
-      const bidTargeting = {...bid.params.targeting || {}};
-      targetingTool.mergeKvsFromOrtb(bidTargeting, bidderRequest);
+      const bidTargeting = { ...bid.params.targeting || {} };
+      targetingTool.mergeKvsFromOrtb(bidTargeting, bidderRequest, bid);
       const mediaTypes = bid.mediaTypes || {};
       const validMediaTypes = SUPPORTED_MEDIA_TYPES.filter(mt => {
         return mediaTypes[mt];
@@ -322,18 +395,41 @@ export const spec = {
           return;
         }
         const targetId = (bid.params.targetId || bid.bidId) + (isSingleFormat || mediaType === BANNER ? '' : ('-' + mediaType));
-        const adUnit = {...bidTargeting, auId: bid.params.auId, targetId: targetId};
+        const adUnit = { ...bidTargeting, auId: bid.params.auId, targetId: targetId };
         if (mediaType === VIDEO) {
           adUnit.adType = 'VAST';
         } else if (mediaType === NATIVE) {
           adUnit.adType = 'NATIVE';
-          adUnit.nativeRequest = mediaTypeData.ortb;
+          if (!mediaTypeData.ortb) {
+            // assume it's using old format if ortb not specified
+            const legacyStyleNativeRequest = deepClone(mediaTypeData);
+            const nativeOrtb = toOrtbNativeRequest(legacyStyleNativeRequest);
+            // add explicit event tracker requests for impressions and viewable impressions, which do not exist in legacy format
+            nativeOrtb.eventtrackers = [
+              {
+                'event': 1,
+                'methods': [1]
+              },
+              {
+                'event': 2,
+                'methods': [1]
+              }
+            ];
+            adUnit.nativeRequest = { ortb: nativeOrtb }
+          } else {
+            adUnit.nativeRequest = { ortb: mediaTypeData.ortb };
+          }
+        }
+        const dealId = deepAccess(bid, 'params.dealId') || deepAccess(bid, 'params.inventory.pmp.deals');
+        if (dealId) {
+          // dealId at adserver accepts single string dealID and array
+          adUnit.dealId = dealId;
         }
         const maxDeals = Math.max(0, Math.min(bid.params.maxDeals || 0, MAXIMUM_DEALS_LIMIT));
         if (maxDeals > 0) {
           adUnit.maxDeals = maxDeals;
         }
-        if (mediaType === BANNER && mediaTypeData && mediaTypeData.sizes) {
+        if (mediaType !== VIDEO && mediaTypeData && mediaTypeData.sizes) {
           adUnit.dimensions = mediaTypeData.sizes;
         }
         networks[network].adUnits.push(adUnit);
@@ -344,10 +440,15 @@ export const spec = {
     const networkKeys = Object.keys(networks);
     for (let j = 0; j < networkKeys.length; j++) {
       const network = networkKeys[j];
-      const requestURL = gdprApplies ? ENDPOINT_URL_EUROPE : ENDPOINT_URL
+      let requestURL = gdprApplies ? ENVS.production.asEu : ENVS.production.as;
+      if (bidderConfig.env && ENVS[bidderConfig.env]) {
+        requestURL = ENVS[bidderConfig.env][bidderConfig.endPointType || 'as'];
+      }
+      requestURL = (bidderConfig.protocol || 'https') + '://' + requestURL + '/i';
+      const requestQueryParams = network === UNSPECIFIED_NETWORK ? queryParamsAndValues : queryParamsAndValues.concat('network=' + encodeURIComponent(network));
       requests.push({
         method: 'POST',
-        url: requestURL + '?' + queryParamsAndValues.join('&'),
+        url: requestURL + '?' + requestQueryParams.join('&'),
         data: JSON.stringify(networks[network]),
         bid: bidRequests[network]
       });
@@ -371,7 +472,7 @@ export const spec = {
       });
     }
 
-    function buildAdResponse(bidderCode, ad, adUnit, dealCount) {
+    function buildAdResponse(bidderCode, ad, adUnit, dealCount, bidOnRequest) {
       const advertiserDomains = ad.advertiserDomains || [];
       if (advertiserDomains.length === 0) {
         const destinationUrls = ad.destinationUrls || {};
@@ -404,7 +505,11 @@ export const spec = {
         adResponse.mediaType = VIDEO;
       } else if (renderSource.nativeJson) {
         adResponse.mediaType = NATIVE;
-        adResponse.native = renderSource.nativeJson;
+        if (bidOnRequest.mediaTypes?.native && !bidOnRequest.mediaTypes?.native?.ortb) {
+          adResponse.native = toLegacyResponse(renderSource.nativeJson.ortb, toOrtbNativeRequest(bidOnRequest.mediaTypes.native));
+        } else {
+          adResponse.native = renderSource.nativeJson;
+        }
       } else {
         adResponse.ad = renderSource.html;
       }
@@ -440,7 +545,7 @@ export const spec = {
       });
     }
 
-    const bidsById = bidRequest.bid.reduce((response, bid) => {
+    const bidRequestsById = bidRequest.bid.reduce((response, bid) => {
       return {
         ...response,
         [bid.bidId]: bid
@@ -448,7 +553,7 @@ export const spec = {
     }, {});
 
     const hasBidAdUnits = highestYieldingAdUnits.filter((au) => {
-      const bid = bidsById[au.targetId];
+      const bid = bidRequestsById[au.targetId];
       if (bid && bid.bidder && BIDDER_CODE_DEAL_ALIASES.indexOf(bid.bidder) < 0) {
         return au.matchedAdCount > 0;
       } else {
@@ -462,19 +567,19 @@ export const spec = {
     });
 
     const dealAdResponses = hasDealsAdUnits.reduce((response, au) => {
-      const bid = bidsById[au.targetId];
-      if (bid) {
+      const selBidRequest = bidRequestsById[au.targetId];
+      if (selBidRequest) {
         (au.deals || []).forEach((deal, i) => {
-          response.push(buildAdResponse(bid.bidder, deal, au, i + 1));
+          response.push(buildAdResponse(selBidRequest.bidder, deal, au, i + 1, selBidRequest));
         });
       }
       return response;
     }, []);
 
     const bidAdResponses = hasBidAdUnits.reduce((response, au) => {
-      const bid = bidsById[au.targetId];
-      if (bid) {
-        response.push(buildAdResponse(bid.bidder, au.ads[0], au, 0));
+      const selBidRequest = bidRequestsById[au.targetId];
+      if (selBidRequest) {
+        response.push(buildAdResponse(selBidRequest.bidder, au.ads[0], au, 0, selBidRequest));
       }
       return response;
     }, []);
